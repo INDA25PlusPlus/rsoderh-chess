@@ -1,6 +1,22 @@
 use std::hash::Hash;
 
-use crate::{moves, span::PositionSpan, Color, Piece, PieceKind, Position};
+use crate::{Color, Piece, PieceKind, Position, moves, span::PositionSpan};
+
+/// Represents which pieces are attacking a certain position.
+pub struct AttackedPosition {
+    /// Position of the piece which is attacked.
+    pub piece: Position,
+    /// List of the pieces which are attacking.
+    pub attackers: Box<[Position]>,
+}
+
+// Represents the check state of a single king.
+pub enum CheckState {
+    /// The king at the specified position is safe.
+    Safe(Position),
+    Check(AttackedPosition),
+    Checkmate(AttackedPosition),
+}
 
 pub enum IllegalMoveType {
     NoPiece,
@@ -10,13 +26,7 @@ pub enum IllegalMoveType {
     /// if a friendly (or enemy in the case of pawns) piece is placed at the destination.
     Position,
     /// The move would have resulted in check mate for the current player.
-    CheckMate,
-}
-
-pub enum CheckState {
-    Safe,
-    Check(Box<[Position]>),
-    CheckMate(Box<[Position]>),
+    Checkmate(AttackedPosition),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -47,10 +57,7 @@ impl Slot {
 }
 
 #[derive(Clone, Hash)]
-pub struct Board {
-    positions: [[Slot; 8]; 8],
-    turn: Color,
-}
+pub struct Board([[Slot; 8]; 8]);
 
 impl Board {
     pub fn new_empty() -> Self {
@@ -66,9 +73,9 @@ impl Board {
         let mut result = self.clone();
         // let mut new_board = result.positions;
 
-        for (row, positions) in result.positions.iter_mut().enumerate() {
+        for (row, positions) in result.0.iter_mut().enumerate() {
             // Flip row order
-            *positions = self.positions[7 - row];
+            *positions = self.0[7 - row];
 
             // Swap colors.
             for slot in positions.iter_mut() {
@@ -80,22 +87,18 @@ impl Board {
                 }
             }
         }
-        result.turn = self.turn.opposite();
         result
     }
 
     pub fn positioned_slots(&self) -> impl Iterator<Item = (Position, &Slot)> {
-        self.positions
-            .iter()
-            .enumerate()
-            .flat_map(|(row, row_slots)| {
-                row_slots.iter().enumerate().map(move |(column, slot)| {
-                    (
-                        Position::new(column as u8, row as u8).expect("indices are in 0..8"),
-                        slot,
-                    )
-                })
+        self.0.iter().enumerate().flat_map(|(row, row_slots)| {
+            row_slots.iter().enumerate().map(move |(column, slot)| {
+                (
+                    Position::new(column as u8, row as u8).expect("indices are in 0..8"),
+                    slot,
+                )
             })
+        })
     }
 
     /// Checks if a move is valid, without calculating the check state, returning the reason if it
@@ -103,6 +106,7 @@ impl Board {
     /// illegal.
     pub fn is_valid_move_ignoring_check(
         &self,
+        turn: Color,
         from: Position,
         to: Position,
     ) -> Result<(), IllegalMoveType> {
@@ -123,7 +127,7 @@ impl Board {
         // TODO: Castling isn't valid if the king leaves, goes over, or moves into an attacked square.
 
         // Invert if black so we can assume that white is the current player.
-        let (board, from, to) = match self.turn {
+        let (board, from, to) = match turn {
             Color::White => (self, from, to),
             Color::Black => (
                 &self.to_inverted(),
@@ -205,19 +209,28 @@ impl Board {
         Ok(())
     }
 
-    /// Checks if a move is valid for the current player, returning the reason if it isn't.
-    pub fn is_valid_move(&self, from: Position, to: Position) -> Result<(), IllegalMoveType> {
+    /// Checks if a move is valid for the specified player, returning the reason if it isn't.
+    pub fn is_valid_move(
+        &self,
+        turn: Color,
+        from: Position,
+        to: Position,
+    ) -> Result<(), IllegalMoveType> {
         // - If king that destination isn't check mate
         // - If source protected king
         // - If in check, then source must be king
         //   ^ can be combined as check for check mate after move.
         // - That the move isn't repeated
-        self.is_valid_move_ignoring_check(from, to)?;
-        if self
-            .get_check_state_for_color(self.turn)
-            .any(|(_, state)| matches!(state, CheckState::CheckMate(_)))
+        self.is_valid_move_ignoring_check(turn, from, to)?;
+        if let Some(attacked_position) = self
+            .get_check_state_for_color(turn)
+            .filter_map(|state| match state {
+                CheckState::Checkmate(attacked_position) => Some(attacked_position),
+                _ => None,
+            })
+            .next()
         {
-            return Err(IllegalMoveType::CheckMate);
+            return Err(IllegalMoveType::Checkmate(attacked_position));
         }
 
         Ok(())
@@ -225,6 +238,7 @@ impl Board {
 
     pub fn valid_moves_ignoring_check_from(
         &self,
+        turn: Color,
         position: Position,
     ) -> Option<impl Iterator<Item = Position>> {
         let piece = self.at_position(position).into_piece()?;
@@ -232,19 +246,27 @@ impl Board {
         Some(
             moves::naive_moves_from_piece(piece, position)
                 .into_iter()
-                .filter(move |destination| self.is_valid_move(position, *destination).is_ok()),
+                .filter(move |destination| {
+                    self.is_valid_move(turn, position, *destination).is_ok()
+                }),
         )
     }
 
     // Returns iterator of all valid move destinations for piece at position. If there isn't a piece
     // there `None` is returned.
-    pub fn valid_moves_from(&self, position: Position) -> Option<impl Iterator<Item = Position>> {
+    pub fn valid_moves_from(
+        &self,
+        turn: Color,
+        position: Position,
+    ) -> Option<impl Iterator<Item = Position>> {
         let piece = self.at_position(position).into_piece()?;
 
         Some(
             moves::naive_moves_from_piece(piece, position)
                 .into_iter()
-                .filter(move |destination| self.is_valid_move(position, *destination).is_ok()),
+                .filter(move |destination| {
+                    self.is_valid_move(turn, position, *destination).is_ok()
+                }),
         )
     }
 
@@ -259,7 +281,7 @@ impl Board {
             .filter_map(move |(attacker_position, slot)| match slot {
                 Slot::Occupied(piece) if piece.color == color => {
                     let mut move_destinations = self
-                        .valid_moves_from(attacker_position)
+                        .valid_moves_from(color, attacker_position)
                         .expect("position to be occupied");
 
                     if move_destinations.any(|dest| dest == position) {
@@ -272,27 +294,22 @@ impl Board {
             })
     }
 
-    /// Calculates if there are any kings of the given player which are currently in check or check
-    /// mate, returning each instance as pair of its position and if check state.
-    /// Note that this has to be returned as a list since there could be multiple kings of the same
-    /// color on the board with different check states.
+    /// For each king on the board, calculates if they are safe, in check, or in check mate. Note
+    /// that this has to be returned as an iterator since the board representation allows multiple
+    /// kings of the same color on the board. These can of course have different check states.
     ///
-    /// The representation means that an empty list is returned if no kings are in check.
-    /// For a standard game where there is only a single king, you could check if a king is in check
-    /// as follows:
-    pub fn get_check_state_for_color(
-        &self,
-        player: Color,
-    ) -> impl Iterator<Item = (Position, CheckState)> {
+    /// If you know that you have a standard board where there is always a single king of either
+    /// color, then you can get that kings check state like this:
+    /// `self.get_check_state_for_color(...).next().unwrap()`
+    ///
+    pub fn get_check_state_for_color(&self, player: Color) -> impl Iterator<Item = CheckState> {
         // Positions with pieces attacking the king.
         self.positioned_slots()
             .filter_map(move |(position, slot)| match slot {
                 Slot::Occupied(Piece {
                     kind: PieceKind::King,
                     color,
-                }) if *color == player => {
-                    Some((position, self.get_king_check_state(position, player)))
-                }
+                }) if *color == player => Some(self.get_king_check_state(position, player)),
                 _ => None,
             })
     }
@@ -322,7 +339,10 @@ impl Board {
                     .is_some()
                 {
                     // A friendly piece can capture the piece attacking the king.
-                    return CheckState::Check(attackers);
+                    return CheckState::Check(AttackedPosition {
+                        piece: position,
+                        attackers,
+                    });
                 }
 
                 // 2.
@@ -332,7 +352,10 @@ impl Board {
             }
             [_, ..] => {
                 // There are more than one attacker
-                return CheckState::CheckMate(attackers);
+                return CheckState::Checkmate(AttackedPosition {
+                    piece: position,
+                    attackers,
+                });
             }
             [] => panic!("attackers has been checked to contain > 0 elements"),
         }
@@ -353,16 +376,27 @@ impl Board {
                     .is_some()
             {
                 // There is a valid move for the king which isn't attacked.
-                return CheckState::Check(attackers);
+                return CheckState::Check(AttackedPosition {
+                    piece: position,
+                    attackers,
+                });
             }
         }
 
-        CheckState::CheckMate(attackers)
+        CheckState::Checkmate(AttackedPosition {
+            piece: position,
+            attackers,
+        })
     }
 
     // Access the slot at `position`.
     pub fn at_position(&self, position: Position) -> Slot {
-        self.positions[position.column.get() as usize][position.row.get() as usize]
+        self.0[position.column.get() as usize][position.row.get() as usize]
+    }
+
+    // Access mutable reference to the slot at `position`.
+    pub fn at_position_mut(&mut self, position: Position) -> &mut Slot {
+        &mut self.0[position.column.get() as usize][position.row.get() as usize]
     }
 
     // Get the color of the piece at `position`, if there is a piece there.
@@ -371,12 +405,115 @@ impl Board {
             .as_piece()
             .map(|piece| piece.color)
     }
+}
 
-    pub fn perform_move(
-        mut self,
-        from: Position,
-        to: Position,
-    ) -> (Self, Result<CheckState, IllegalMoveType>) {
-        todo!()
+pub enum GameResult {
+    /// At least one of the other player's kings is in check mate.
+    Checkmate {
+        winner: Color,
+        /// The king which was in checkmate. If there were multiple then one is picked arbitrarily.
+        attacked_king: AttackedPosition,
+    },
+    // /// The other players king isn't in check, but has no valid moves.
+    // Stalemate,
+    // TODO: Represent resignation
+    // TODO: Represent manual draw
+    // TODO: Represent draw due to repeated moves.
+    // TODO: Represent draw due to repeated moves.
+}
+
+/// Represents whether a move, which didn't end the game, resulted in a check. If so, which pieces
+/// are attacking the king is included.
+pub enum CheckOutcome {
+    /// None of the other player's king are in check.
+    Safe,
+    /// The move occurred as wanted, and at least one of the other players kings is in check.
+    /// Includes which pieces are attacking the king. If multiple enemy kings are in check (i.e. due
+    /// to a custom board setup), one is picked arbitrarily.
+    Check(AttackedPosition),
+}
+
+pub enum MoveResult {
+    /// The move was successfully applied. The new game state is included, and information about if
+    /// the other player's king(s) is in check. Note that checkmate isn't included as a case, as
+    /// that would imply that the game is finished.
+    Ongoing(Game, CheckOutcome),
+    /// The move resulted in a game over state. The final finshed game state is included.
+    /// Information about why it finished and who won is included as part of the included struct
+    /// (TODO: reference the method), i.e. checkmate, stalemate, etc.
+    Finished(FinishedGame),
+    /// The move wasn't legal. The previous game state is included.
+    Illegal(Game, IllegalMoveType),
+}
+
+pub struct Game {
+    board: Board,
+    turn: Color,
+}
+
+impl Game {
+    /// Access the current game board.
+    pub fn board(&self) -> &Board {
+        &self.board
+    }
+    pub fn perform_move(mut self, from: Position, to: Position) -> MoveResult {
+        // Check if the move is valid.
+        if let Err(error) = self.board.is_valid_move(self.turn, from, to) {
+            return MoveResult::Illegal(self, error);
+        };
+
+        // Move the piece on the board.
+        *self.board.at_position_mut(to) = self.board.at_position(from);
+        *self.board.at_position_mut(from) = Slot::Empty;
+
+        // Calculate the check state of the new board.
+        let check_state = self
+            .board
+            .get_check_state_for_color(self.turn.opposite())
+            .max_by_key(|check_state| match check_state {
+                CheckState::Safe(_) => 0,
+                CheckState::Check(_) => 1,
+                CheckState::Checkmate(_) => 2,
+            });
+
+        // If the game hasn't ended, specifies if the other player's king(s) is in check.
+        let check_state_ongoing = match check_state {
+            // There are no kings on the board which can't occur unless the game started without any
+            // kings. Just say that no kings are in check.
+            None => CheckOutcome::Safe,
+            Some(CheckState::Safe(_)) => CheckOutcome::Safe,
+            Some(CheckState::Check(attacked_position)) => CheckOutcome::Check(attacked_position),
+            Some(CheckState::Checkmate(attacked_position)) => {
+                return MoveResult::Finished(FinishedGame {
+                    board: self.board,
+                    result: GameResult::Checkmate {
+                        winner: self.turn,
+                        attacked_king: attacked_position,
+                    },
+                });
+            }
+        };
+
+        // Flip the current turn.
+        self.turn = self.turn.opposite();
+
+        MoveResult::Ongoing(self, check_state_ongoing)
+    }
+}
+
+pub struct FinishedGame {
+    board: Board,
+    result: GameResult,
+}
+
+impl FinishedGame {
+    /// Access the final game board.
+    pub fn board(&self) -> &Board {
+        &self.board
+    }
+
+    /// Access the final game result.
+    pub fn result(&self) -> &GameResult {
+        &self.result
     }
 }
