@@ -102,7 +102,6 @@ impl PositionSpan {
         } else {
             None
         }
-        
     }
 }
 

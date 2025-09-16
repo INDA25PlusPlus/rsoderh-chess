@@ -1,5 +1,6 @@
+use std::fmt::Debug;
 
-#[derive(Clone, Copy, Eq, PartialEq, Hash)]
+#[derive(Clone, Copy, Eq, PartialEq, Hash, Debug)]
 pub enum Color {
     White,
     Black,
@@ -15,7 +16,7 @@ impl Color {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum PieceKind {
     Pawn,
     Knight,
@@ -29,4 +30,16 @@ pub enum PieceKind {
 pub struct Piece {
     pub kind: PieceKind,
     pub color: Color,
+}
+
+impl Piece {
+    pub fn new(kind: PieceKind, color: Color) -> Self {
+        Self { kind, color }
+    }
+}
+
+impl Debug for Piece {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?} {:?}", self.color, self.kind)
+    }
 }

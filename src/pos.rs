@@ -1,6 +1,5 @@
 use std::fmt::Debug;
 
-
 /// Represents a coordinate on a chess board. Wrapper around u8 guaranteed to be within 0..8
 /// (exclusive).
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
@@ -13,7 +12,7 @@ impl PositionIndex {
             _ => None,
         }
     }
-    
+
     pub fn get(&self) -> u8 {
         self.0
     }

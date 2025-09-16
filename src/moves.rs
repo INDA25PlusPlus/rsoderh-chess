@@ -424,7 +424,7 @@ mod tests {
             ],
         );
     }
-    
+
     #[test]
     fn test_king_white() {
         assert_moves_eq(
@@ -447,7 +447,7 @@ mod tests {
             ],
         );
     }
-    
+
     #[test]
     fn test_king_edge_black() {
         assert_moves_eq(

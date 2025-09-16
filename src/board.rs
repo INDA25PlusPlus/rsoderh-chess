@@ -1,6 +1,10 @@
-use std::hash::Hash;
+use core::panic;
+use std::{fmt::Debug, hash::Hash};
 
 use crate::{Color, Piece, PieceKind, Position, moves, span::PositionSpan};
+
+#[cfg(test)]
+mod tests;
 
 /// Represents which pieces are attacking a certain position.
 pub struct AttackedPosition {
@@ -56,17 +60,176 @@ impl Slot {
     }
 }
 
-#[derive(Clone, Hash)]
+impl Debug for Slot {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Empty => write!(f, "Empty"),
+            Self::Occupied(piece) => write!(f, "{:?}", piece),
+        }
+    }
+}
+
+// About the representation of the board slots:
+// They are stored in an array of rows, represented as an array of columns. These are stored so that
+// lower row and column indices are earlier in the array. Note that this implies that when written
+// out as a literal, the rows will appear inverted.
+
+#[derive(Clone, Hash, Debug, PartialEq, Eq)]
 pub struct Board([[Slot; 8]; 8]);
 
 impl Board {
     pub fn new_empty() -> Self {
-        todo!()
-        // Self {
-        //     positions: [[Slot::Empty; 8]; 8],
-        //     turn: Color::White,
-        // }
+        Self([[Slot::Empty; 8]; 8])
     }
+
+    // Returns a board with the standard starting position.
+    pub fn new_standard() -> Self {
+        Board([
+            [
+                Slot::Occupied(Piece::new(PieceKind::Rook, Color::White)),
+                Slot::Occupied(Piece::new(PieceKind::Knight, Color::White)),
+                Slot::Occupied(Piece::new(PieceKind::Bishop, Color::White)),
+                Slot::Occupied(Piece::new(PieceKind::Queen, Color::White)),
+                Slot::Occupied(Piece::new(PieceKind::King, Color::White)),
+                Slot::Occupied(Piece::new(PieceKind::Bishop, Color::White)),
+                Slot::Occupied(Piece::new(PieceKind::Knight, Color::White)),
+                Slot::Occupied(Piece::new(PieceKind::Rook, Color::White)),
+            ],
+            [
+                Slot::Occupied(Piece::new(PieceKind::Pawn, Color::White)),
+                Slot::Occupied(Piece::new(PieceKind::Pawn, Color::White)),
+                Slot::Occupied(Piece::new(PieceKind::Pawn, Color::White)),
+                Slot::Occupied(Piece::new(PieceKind::Pawn, Color::White)),
+                Slot::Occupied(Piece::new(PieceKind::Pawn, Color::White)),
+                Slot::Occupied(Piece::new(PieceKind::Pawn, Color::White)),
+                Slot::Occupied(Piece::new(PieceKind::Pawn, Color::White)),
+                Slot::Occupied(Piece::new(PieceKind::Pawn, Color::White)),
+            ],
+            [Slot::Empty; 8],
+            [Slot::Empty; 8],
+            [Slot::Empty; 8],
+            [Slot::Empty; 8],
+            [
+                Slot::Occupied(Piece::new(PieceKind::Pawn, Color::Black)),
+                Slot::Occupied(Piece::new(PieceKind::Pawn, Color::Black)),
+                Slot::Occupied(Piece::new(PieceKind::Pawn, Color::Black)),
+                Slot::Occupied(Piece::new(PieceKind::Pawn, Color::Black)),
+                Slot::Occupied(Piece::new(PieceKind::Pawn, Color::Black)),
+                Slot::Occupied(Piece::new(PieceKind::Pawn, Color::Black)),
+                Slot::Occupied(Piece::new(PieceKind::Pawn, Color::Black)),
+                Slot::Occupied(Piece::new(PieceKind::Pawn, Color::Black)),
+            ],
+            [
+                Slot::Occupied(Piece::new(PieceKind::Rook, Color::Black)),
+                Slot::Occupied(Piece::new(PieceKind::Knight, Color::Black)),
+                Slot::Occupied(Piece::new(PieceKind::Bishop, Color::Black)),
+                Slot::Occupied(Piece::new(PieceKind::Queen, Color::Black)),
+                Slot::Occupied(Piece::new(PieceKind::King, Color::Black)),
+                Slot::Occupied(Piece::new(PieceKind::Bishop, Color::Black)),
+                Slot::Occupied(Piece::new(PieceKind::Knight, Color::Black)),
+                Slot::Occupied(Piece::new(PieceKind::Rook, Color::Black)),
+            ],
+        ])
+    }
+
+    /// Parses string representation of a chess board. String is trimmed before parsing.
+    /// The string must start and end with a line containing "+--+--+--+--+--+--+--+--+".
+    /// There should be eight lines starting with optional whitespace and starting and ending with
+    /// "|". Within these there must be 8 cells separated by "|". Each cell either contains two
+    /// spaces if empty or two characters where the first letter in each cell signifies the color
+    /// - "w": white
+    /// - "b": black
+    ///
+    /// and the second signifies the type
+    /// - "p": pawn
+    /// - "n": knight
+    /// - "b": bishop
+    /// - "r": rook
+    /// - "q": queen
+    /// - "k": king
+    ///
+    /// Example of the syntax:
+    /// ```
+    /// use rsoderh_chess::Board;
+    /// assert_eq!(
+    ///     Board::parse_str(
+    ///         "
+    ///          +--+--+--+--+--+--+--+--+
+    ///         8|br|bn|bb|bq|bk|bb|bn|br|
+    ///         7|bp|bp|bp|bp|bp|bp|bp|bp|
+    ///         6|  |  |  |  |  |  |  |  |
+    ///         5|  |  |  |  |  |  |  |  |
+    ///         4|  |  |  |  |  |  |  |  |
+    ///         3|  |  |  |  |  |  |  |  |
+    ///         2|wp|wp|wp|wp|wp|wp|wp|wp|
+    ///         1|wr|wn|wb|wq|wk|wb|wn|wr|
+    ///          +--+--+--+--+--+--+--+--+
+    ///            a  b  c  d  e  f  g  h
+    ///         ",
+    ///     ),
+    ///     Some(Board::new_standard())
+    /// );
+    /// ```
+    pub fn parse_str(string: &str) -> Option<Self> {
+        let string = string.trim();
+        // Check that string starts with the right prefix
+        let string = string.strip_prefix("+--+--+--+--+--+--+--+--+")?.trim();
+        // Check that string ends with the right suffix.
+        let string = string.strip_suffix(" a  b  c  d  e  f  g  h")?.trim();
+        let string = string.strip_suffix("+--+--+--+--+--+--+--+--+")?.trim();
+
+        let slots: [[Slot; 8]; 8] = string
+            .lines()
+            .rev()
+            .enumerate()
+            .map(|(index, line)| {
+                let line_number = index + 1;
+                let line_prefix = char::from_digit(line_number as u32, 10)?.to_string();
+
+                let line = line
+                    .trim()
+                    .strip_prefix(&line_prefix)?
+                    .strip_prefix("|")?
+                    .strip_suffix("|")?;
+                line.split("|")
+                    .map(|cell_str| {
+                        if cell_str == "  " {
+                            return Some(Slot::Empty);
+                        }
+
+                        let [first_char, second_char] = cell_str.chars().collect::<Box<[_]>>()[..]
+                        else {
+                            return None;
+                        };
+
+                        Some(Slot::Occupied(Piece {
+                            color: match first_char {
+                                'w' => Color::White,
+                                'b' => Color::Black,
+                                _ => return None,
+                            },
+                            kind: match second_char {
+                                'p' => PieceKind::Pawn,
+                                'n' => PieceKind::Knight,
+                                'b' => PieceKind::Bishop,
+                                'r' => PieceKind::Rook,
+                                'q' => PieceKind::Queen,
+                                'k' => PieceKind::King,
+                                _ => return None,
+                            },
+                        }))
+                    })
+                    .collect::<Option<Vec<_>>>()?
+                    .try_into()
+                    .ok()
+            })
+            .collect::<Option<Vec<_>>>()?
+            .try_into()
+            .ok()?;
+
+        Some(Self(slots))
+    }
+
     /// Mirror board along the y-axis and flip the colors of the pieces, as if
     /// it was the opposite players turn.
     pub fn to_inverted(&self) -> Self {
@@ -198,8 +361,8 @@ impl Board {
         }
 
         // Check 6.
-        // Assumption: Check 4. guarantees that if dest has an enemy piece, that
-        if from.column() != to.column()
+        if piece.kind == PieceKind::Pawn
+            && from.column() != to.column()
             // Move is diagnonal.
             && self.color_at_position(to) != Some(Color::Black)
         {
@@ -222,10 +385,22 @@ impl Board {
         //   ^ can be combined as check for check mate after move.
         // - That the move isn't repeated
         self.is_valid_move_ignoring_check(turn, from, to)?;
-        if let Some(attacked_position) = self
+
+        // Create clone with move applied, and calculate if it's in check (yes, this feels very
+        // ugly).
+        let mut moved_board = self.clone();
+        *moved_board.at_position_mut(to) = moved_board.at_position(from);
+        *moved_board.at_position_mut(from) = Slot::Empty;
+
+        if let Some(attacked_position) = moved_board
             .get_check_state_for_color(turn)
             .filter_map(|state| match state {
                 CheckState::Checkmate(attacked_position) => Some(attacked_position),
+                // Note: `get_check_state_for_color` will return check if the current player can
+                //   move a piece to block the attacker, but since the current player has just
+                //   moved, and the other player is next to move we need to consider this case as
+                //   checkmate as well.
+                CheckState::Check(attacked_position) => Some(attacked_position),
                 _ => None,
             })
             .next()
@@ -247,7 +422,8 @@ impl Board {
             moves::naive_moves_from_piece(piece, position)
                 .into_iter()
                 .filter(move |destination| {
-                    self.is_valid_move(turn, position, *destination).is_ok()
+                    self.is_valid_move_ignoring_check(turn, position, *destination)
+                        .is_ok()
                 }),
         )
     }
@@ -281,11 +457,14 @@ impl Board {
             .filter_map(move |(attacker_position, slot)| match slot {
                 Slot::Occupied(piece) if piece.color == color => {
                     let mut move_destinations = self
-                        .valid_moves_from(color, attacker_position)
+                        // TODO: I'm pretty sure it isn't valid to skip checking the check state
+                        //   here, but checking it creates infinite recursion, which I don't know
+                        //   how to avoid.
+                        .valid_moves_ignoring_check_from(color, attacker_position)
                         .expect("position to be occupied");
 
                     if move_destinations.any(|dest| dest == position) {
-                        Some(position)
+                        Some(attacker_position)
                     } else {
                         None
                     }
@@ -294,9 +473,11 @@ impl Board {
             })
     }
 
-    /// For each king on the board, calculates if they are safe, in check, or in check mate. Note
-    /// that this has to be returned as an iterator since the board representation allows multiple
-    /// kings of the same color on the board. These can of course have different check states.
+    /// For each king on the board, calculates if they are safe, in check, or in check mate,
+    /// assuming that it's the king's turn, meaning it can move.
+    ///
+    /// Note that this has to be returned as an iterator since the board representation allows
+    /// multiple kings of the same color on the board. These can of course have different check states.
     ///
     /// If you know that you have a standard board where there is always a single king of either
     /// color, then you can get that kings check state like this:
@@ -373,7 +554,7 @@ impl Board {
                 && self
                     .pieces_attacking_position(dest, color.opposite())
                     .next()
-                    .is_some()
+                    .is_none()
             {
                 // There is a valid move for the king which isn't attacked.
                 return CheckState::Check(AttackedPosition {
@@ -391,12 +572,12 @@ impl Board {
 
     // Access the slot at `position`.
     pub fn at_position(&self, position: Position) -> Slot {
-        self.0[position.column.get() as usize][position.row.get() as usize]
+        self.0[position.row.get() as usize][position.column.get() as usize]
     }
 
     // Access mutable reference to the slot at `position`.
     pub fn at_position_mut(&mut self, position: Position) -> &mut Slot {
-        &mut self.0[position.column.get() as usize][position.row.get() as usize]
+        &mut self.0[position.row.get() as usize][position.column.get() as usize]
     }
 
     // Get the color of the piece at `position`, if there is a piece there.
@@ -452,6 +633,14 @@ pub struct Game {
 }
 
 impl Game {
+    /// Create a new game from a strating position, with the given player starting.
+    pub fn new(board: Board, starting_player: Color) -> Self {
+        Self {
+            board,
+            turn: starting_player,
+        }
+    }
+
     /// Access the current game board.
     pub fn board(&self) -> &Board {
         &self.board
