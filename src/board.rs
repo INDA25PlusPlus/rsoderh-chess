@@ -1,5 +1,7 @@
-use core::panic;
-use std::{fmt::Debug, hash::Hash};
+use std::{
+    fmt::{Debug, Write},
+    hash::Hash,
+};
 
 use crate::{Color, Piece, PieceKind, Position, moves, span::PositionSpan};
 
@@ -7,6 +9,7 @@ use crate::{Color, Piece, PieceKind, Position, moves, span::PositionSpan};
 mod tests;
 
 /// Represents which pieces are attacking a certain position.
+#[derive(Debug, PartialEq, Eq)]
 pub struct AttackedPosition {
     /// Position of the piece which is attacked.
     pub piece: Position,
@@ -22,6 +25,7 @@ pub enum CheckState {
     Checkmate(AttackedPosition),
 }
 
+#[derive(Debug, PartialEq, Eq)]
 pub enum IllegalMoveType {
     NoPiece,
     Color,
@@ -74,7 +78,7 @@ impl Debug for Slot {
 // lower row and column indices are earlier in the array. Note that this implies that when written
 // out as a literal, the rows will appear inverted.
 
-#[derive(Clone, Hash, Debug, PartialEq, Eq)]
+#[derive(Clone, Hash, PartialEq, Eq)]
 pub struct Board([[Slot; 8]; 8]);
 
 impl Board {
@@ -588,6 +592,43 @@ impl Board {
     }
 }
 
+impl Debug for Board {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("\n     +--+--+--+--+--+--+--+--+")?;
+        for (i, row) in self.0.iter().enumerate().rev() {
+            write!(f, "\n    {}|", i + 1)?;
+
+            for slot in row.iter() {
+                match slot {
+                    Slot::Empty => {
+                        f.write_str("  |")?;
+                    }
+                    Slot::Occupied(piece) => {
+                        f.write_char(match piece.color {
+                            Color::Black => 'b',
+                            Color::White => 'w',
+                        })?;
+                        f.write_char(match piece.kind {
+                            PieceKind::Pawn => 'p',
+                            PieceKind::Knight => 'n',
+                            PieceKind::Bishop => 'b',
+                            PieceKind::Rook => 'r',
+                            PieceKind::Queen => 'q',
+                            PieceKind::King => 'k',
+                        })?;
+                        f.write_char('|')?;
+                    }
+                }
+            }
+        }
+        f.write_str("\n     +--+--+--+--+--+--+--+--+")?;
+        f.write_str("\n       a  b  c  d  e  f  g  h\n")?;
+
+        Ok(())
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
 pub enum GameResult {
     /// At least one of the other player's kings is in check mate.
     Checkmate {
@@ -605,6 +646,7 @@ pub enum GameResult {
 
 /// Represents whether a move, which didn't end the game, resulted in a check. If so, which pieces
 /// are attacking the king is included.
+#[derive(Debug, PartialEq, Eq)]
 pub enum CheckOutcome {
     /// None of the other player's king are in check.
     Safe,
@@ -614,6 +656,7 @@ pub enum CheckOutcome {
     Check(AttackedPosition),
 }
 
+#[derive(Debug, PartialEq, Eq)]
 pub enum MoveResult {
     /// The move was successfully applied. The new game state is included, and information about if
     /// the other player's king(s) is in check. Note that checkmate isn't included as a case, as
@@ -627,6 +670,7 @@ pub enum MoveResult {
     Illegal(Game, IllegalMoveType),
 }
 
+#[derive(Debug, PartialEq, Eq)]
 pub struct Game {
     board: Board,
     turn: Color,
@@ -690,6 +734,7 @@ impl Game {
     }
 }
 
+#[derive(Debug, PartialEq, Eq)]
 pub struct FinishedGame {
     board: Board,
     result: GameResult,
