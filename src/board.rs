@@ -18,6 +18,7 @@ pub struct AttackedPosition {
 }
 
 // Represents the check state of a single king.
+#[derive(Debug, PartialEq, Eq)]
 pub enum CheckState {
     /// The king at the specified position is safe.
     Safe(Position),
