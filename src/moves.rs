@@ -107,7 +107,7 @@ fn white_queen_moves(from: Position) -> impl Iterator<Item = Position> {
 fn white_king_moves(from: Position) -> impl Iterator<Item = Position> {
     // Every combination where column and row is one of -1, 0, and 1:
     // (Excluding (0, 0))
-    translated_positions(
+    let mut positions = translated_positions(
         from,
         [
             (1, 1),
@@ -119,7 +119,14 @@ fn white_king_moves(from: Position) -> impl Iterator<Item = Position> {
             (-1, 1),
             (0, 1),
         ],
-    )
+    ).collect::<Vec<_>>();
+    
+    if from.column() == 4 && from.row() == 0 {
+        positions.push(Position::new(2, 0).unwrap());
+        positions.push(Position::new(6, 0).unwrap());
+    }
+    
+    positions.into_iter()
 }
 
 /// Return "naive" list of moves a piece is allowed to do from the given position assuming the board
@@ -462,6 +469,50 @@ mod tests {
                 Position::parse("b1").unwrap(),
                 Position::parse("a2").unwrap(),
                 Position::parse("b2").unwrap(),
+            ],
+        );
+    }
+    
+    #[test]
+    fn king_castling_white() {
+        assert_moves_eq(
+            naive_moves_from_piece(
+                Piece {
+                    kind: PieceKind::King,
+                    color: Color::White,
+                },
+                Position::parse("e1").unwrap(),
+            ),
+            [
+                Position::parse("d1").unwrap(),
+                Position::parse("d2").unwrap(),
+                Position::parse("e2").unwrap(),
+                Position::parse("f2").unwrap(),
+                Position::parse("f1").unwrap(),
+                Position::parse("c1").unwrap(),
+                Position::parse("g1").unwrap(),
+            ],
+        );
+    }
+    
+    #[test]
+    fn king_castling_black() {
+        assert_moves_eq(
+            naive_moves_from_piece(
+                Piece {
+                    kind: PieceKind::King,
+                    color: Color::Black,
+                },
+                Position::parse("e8").unwrap(),
+            ),
+            [
+                Position::parse("d8").unwrap(),
+                Position::parse("d7").unwrap(),
+                Position::parse("e7").unwrap(),
+                Position::parse("f7").unwrap(),
+                Position::parse("f8").unwrap(),
+                Position::parse("c8").unwrap(),
+                Position::parse("g8").unwrap(),
             ],
         );
     }

@@ -671,3 +671,243 @@ fn en_passant_illegal_rook() {
         result => panic!("Unexpected move result: {:?}", result),
     }
 }
+
+#[test]
+fn moves_castling() {
+    let board = Board::parse_str(
+        "
+         +--+--+--+--+--+--+--+--+
+        8|br|  |  |  |bk|  |  |br|
+        7|  |  |  |  |  |  |  |  |
+        6|  |  |  |  |  |  |  |  |
+        5|  |  |  |  |  |  |  |  |
+        4|  |  |  |  |  |  |  |  |
+        3|  |  |  |  |  |  |  |  |
+        2|  |  |  |  |  |  |  |  |
+        1|  |  |  |  |  |  |  |  |
+         +--+--+--+--+--+--+--+--+
+           a  b  c  d  e  f  g  h
+        ",
+    )
+    .unwrap();
+
+    assert_match!(
+        board.is_valid_move(
+            Position::parse("e8").unwrap(),
+            Position::parse("c8").unwrap(),
+            Color::Black,
+            &[]
+        ),
+        Ok(Turn {
+            player: Color::Black,
+            half_move: HalfMove::Castle(CastleType::Queenside)
+        }),
+    );
+    assert_match!(
+        board.is_valid_move(
+            Position::parse("e8").unwrap(),
+            Position::parse("c8").unwrap(),
+            Color::Black,
+            &[
+                Turn {
+                    player: Color::Black,
+                    half_move: HalfMove::Standard {
+                        source: Position::parse("a8").unwrap(),
+                        dest: Position::parse("a7").unwrap(),
+                        capture: None
+                    }
+                },
+                Turn {
+                    player: Color::Black,
+                    half_move: HalfMove::Standard {
+                        source: Position::parse("a7").unwrap(),
+                        dest: Position::parse("a8").unwrap(),
+                        capture: None
+                    }
+                },
+            ]
+        ),
+        Err(IllegalMoveType::Position),
+    );
+    assert_match!(
+        board.is_valid_move(
+            Position::parse("e8").unwrap(),
+            Position::parse("g8").unwrap(),
+            Color::Black,
+            &[]
+        ),
+        Ok(Turn {
+            player: Color::Black,
+            half_move: HalfMove::Castle(CastleType::Kingside)
+        }),
+    );
+    assert_match!(
+        board.is_valid_move(
+            Position::parse("e8").unwrap(),
+            Position::parse("g8").unwrap(),
+            Color::Black,
+            &[
+                Turn {
+                    player: Color::Black,
+                    half_move: HalfMove::Standard {
+                        source: Position::parse("e8").unwrap(),
+                        dest: Position::parse("e7").unwrap(),
+                        capture: None
+                    }
+                },
+                Turn {
+                    player: Color::Black,
+                    half_move: HalfMove::Standard {
+                        source: Position::parse("e7").unwrap(),
+                        dest: Position::parse("e8").unwrap(),
+                        capture: None
+                    }
+                },
+            ]
+        ),
+        Err(IllegalMoveType::Position),
+    );
+
+    assert_moves_eq(
+        board
+            .valid_moves_from(Position::parse("e8").unwrap(), Color::Black, &[])
+            .unwrap(),
+        [
+            Position::parse("d8").unwrap(),
+            Position::parse("d7").unwrap(),
+            Position::parse("e7").unwrap(),
+            Position::parse("f7").unwrap(),
+            Position::parse("f8").unwrap(),
+            Position::parse("c8").unwrap(),
+            Position::parse("g8").unwrap(),
+        ],
+    );
+}
+
+#[test]
+fn moves_castling_illegal_blocked() {
+    let board = Board::parse_str(
+        "
+         +--+--+--+--+--+--+--+--+
+        8|br|bn|  |  |bk|bb|  |br|
+        7|  |  |  |  |  |  |  |  |
+        6|  |  |  |  |  |  |  |  |
+        5|  |  |  |  |  |  |  |  |
+        4|  |  |  |  |  |  |  |  |
+        3|  |  |  |  |  |  |  |  |
+        2|  |  |  |  |  |  |  |  |
+        1|  |  |  |  |  |  |  |  |
+         +--+--+--+--+--+--+--+--+
+           a  b  c  d  e  f  g  h
+        ",
+    )
+    .unwrap();
+
+    assert_match!(
+        board.is_valid_move(
+            Position::parse("e8").unwrap(),
+            Position::parse("c8").unwrap(),
+            Color::Black,
+            &[]
+        ),
+        Err(IllegalMoveType::Position),
+    );
+    assert_match!(
+        board.is_valid_move(
+            Position::parse("e8").unwrap(),
+            Position::parse("g8").unwrap(),
+            Color::Black,
+            &[]
+        ),
+        Err(IllegalMoveType::Position),
+    );
+}
+
+#[test]
+fn moves_castling_illegal_attacked() {
+    let board = Board::parse_str(
+        "
+         +--+--+--+--+--+--+--+--+
+        8|br|  |  |  |bk|  |  |br|
+        7|  |  |  |  |  |  |  |  |
+        6|  |  |  |  |  |  |  |  |
+        5|  |  |  |wr|  |  |wr|  |
+        4|  |  |  |  |  |  |  |  |
+        3|  |  |  |  |  |  |  |  |
+        2|  |  |bn|  |  |  |  |  |
+        1|  |  |  |  |wk|  |  |wr|
+         +--+--+--+--+--+--+--+--+
+           a  b  c  d  e  f  g  h
+        ",
+    )
+    .unwrap();    
+
+    assert_match!(
+        board.is_valid_move(
+            Position::parse("e8").unwrap(),
+            Position::parse("c8").unwrap(),
+            Color::Black,
+            &[]
+        ),
+        Err(IllegalMoveType::CastleAttacked),
+    );
+    assert_match!(
+        board.is_valid_move(
+            Position::parse("e8").unwrap(),
+            Position::parse("g8").unwrap(),
+            Color::Black,
+            &[]
+        ),
+        Err(IllegalMoveType::Checkmate(_)),
+    );
+    assert_match!(
+        board.is_valid_move(
+            Position::parse("e1").unwrap(),
+            Position::parse("g1").unwrap(),
+            Color::White,
+            &[]
+        ),
+        Err(IllegalMoveType::CastleAttacked),
+    );
+}
+
+#[test]
+fn game_castling() {
+    assert_game_result(
+        "
+         +--+--+--+--+--+--+--+--+
+        8|br|  |  |  |bk|  |  |  |
+        7|  |  |  |  |  |  |  |  |
+        6|  |  |  |  |  |  |  |  |
+        5|  |  |  |wk|  |  |  |  |
+        4|  |  |  |wp|  |  |  |  |
+        3|  |  |  |  |  |  |  |  |
+        2|  |  |br|  |br|  |  |  |
+        1|  |  |  |  |  |  |  |  |
+         +--+--+--+--+--+--+--+--+
+           a  b  c  d  e  f  g  h
+        ",
+        Color::Black,
+        [("e8", "c8")],
+        "
+         +--+--+--+--+--+--+--+--+
+        8|  |  |bk|br|  |  |  |  |
+        7|  |  |  |  |  |  |  |  |
+        6|  |  |  |  |  |  |  |  |
+        5|  |  |  |wk|  |  |  |  |
+        4|  |  |  |wp|  |  |  |  |
+        3|  |  |  |  |  |  |  |  |
+        2|  |  |br|  |br|  |  |  |
+        1|  |  |  |  |  |  |  |  |
+         +--+--+--+--+--+--+--+--+
+           a  b  c  d  e  f  g  h
+        ",
+        GameResult::Checkmate {
+            winner: Color::Black,
+            attacked_king: AttackedPosition {
+                piece: Position::parse("d5").unwrap(),
+                attackers: vec![Position::parse("d8").unwrap()].into(),
+            },
+        },
+    );
+}

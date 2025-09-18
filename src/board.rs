@@ -34,6 +34,9 @@ pub enum IllegalMoveType {
     /// piece can't move in that direction, a piece was blocking the way, or
     /// if a friendly (or enemy in the case of pawns) piece is placed at the destination.
     Position,
+    /// Tried to castle, but the king's original position or one of the positions it passed through
+    /// were under attack.
+    CastleAttacked,
     /// The move would have resulted in check mate for the current player.
     Checkmate(AttackedPosition),
 }
@@ -288,6 +291,12 @@ impl Board {
         // 5. There isn't a friendly piece at destination
         // 6. If pawn and moving diagonally, that there is an enemy piece there OR that a pawn just
         //    moved two spaces last turn skipping over that position (i.e. en passant).
+        // 7. If king and moving from standard starting position to a castling position,
+        //   7.1 that the corresponding rook is at its standard starting position,
+        //   7.2 that none of the spaces in between are occupied,
+        //   7.3 that neither the king nor the rook have been moved,
+        //   7.4 and that neither the king's original position nor the position which the king
+        //       passes through are under attack.
 
         // misc
         // TODO: En passant isn't valid.
@@ -297,12 +306,16 @@ impl Board {
         // TODO: Castling isn't valid if the king leaves, goes over, or moves into an attacked square.
 
         // Invert if black so we can assume that white is the current player.
-        let (board, from, to) = match turn {
-            Color::White => (self, from, to),
+        let (board, from, to, turn_history) = match turn {
+            Color::White => (self, from, to, turn_history.into()),
             Color::Black => (
                 &self.to_inverted(),
                 from.as_other_color(),
                 to.as_other_color(),
+                turn_history
+                    .iter()
+                    .map(Turn::to_opposite)
+                    .collect::<Box<_>>(),
             ),
         };
 
@@ -361,7 +374,9 @@ impl Board {
                     }
                 }
             }
-            PieceKind::King => {} // There are no positions between `from` and `to`
+            // There are no positions between `from` and `to`, except when castling, which is
+            // handled by 7.2.
+            PieceKind::King => {}
         }
 
         // Check 5.
@@ -394,7 +409,6 @@ impl Board {
                     == Some(Piece::new(PieceKind::Pawn, Color::Black))
             {
                 // Pawn captured enemy pawn en passant.
-                eprintln!("en passant");
                 capture = Some((
                     to.translated((0, -1))
                         .expect("the outer guard can't pass unless this translation succeeded"),
@@ -403,6 +417,73 @@ impl Board {
             } else {
                 return Err(IllegalMoveType::Position);
             }
+        }
+
+        // Check 7.
+        if piece.kind == PieceKind::King
+            && from == Position::new(4, 0).unwrap()
+            && (to == Position::new(2, 0).unwrap() || to == Position::new(6, 0).unwrap())
+        {
+            let castle_type = if to.column() == 2 {
+                CastleType::Queenside
+            } else {
+                CastleType::Kingside
+            };
+
+            let rook_position = match castle_type {
+                CastleType::Queenside => Position::new(0, 0).unwrap(),
+                CastleType::Kingside => Position::new(7, 0).unwrap(),
+            };
+
+            // Check 7.1.
+            if board.at_position(rook_position)
+                != Slot::Occupied(Piece::new(PieceKind::Rook, Color::White))
+            {
+                return Err(IllegalMoveType::Position);
+            }
+
+            // Check 7.2.
+            for position in PositionSpan::new(from, rook_position)
+                .expect("from and rook lie in the same row")
+                // Skip the source position, as that contains the source piece.
+                .skip(1)
+            {
+                if board.at_position(position) != Slot::Empty {
+                    return Err(IllegalMoveType::Position);
+                }
+            }
+
+            // Check 7.3
+            if turn_history.iter().any(|turn| {
+                // Turn moved king
+                turn.dest() == from
+                // Turn moved rook
+                || turn.dest() == rook_position
+            }) {
+                return Err(IllegalMoveType::Position);
+            }
+
+            // Check 7.4
+            let passed_position = match castle_type {
+                CastleType::Queenside => Position::new(3, 0).unwrap(),
+                CastleType::Kingside => Position::new(5, 0).unwrap(),
+            };
+            if board
+                .pieces_attacking_position(from, Color::Black, &turn_history)
+                .next()
+                .is_some()
+                || board
+                    .pieces_attacking_position(passed_position, Color::Black, &turn_history)
+                    .next()
+                    .is_some()
+            {
+                return Err(IllegalMoveType::CastleAttacked);
+            }
+
+            return Ok(Turn {
+                player: turn,
+                half_move: HalfMove::Castle(castle_type),
+            });
         }
 
         // Invert back if black
@@ -620,7 +701,10 @@ impl Board {
             position,
         ) {
             // Check that potential position is empty, and that no enemy piece is attacking it.
-            if self.at_position(dest) == Slot::Empty
+            if
+            // Skip if dest is the position castling would result in.
+            dest.column().abs_diff(position.column()) <= 1
+                && self.at_position(dest) == Slot::Empty
                 && self
                     .pieces_attacking_position(dest, color.opposite(), turn_history)
                     .next()
@@ -655,6 +739,56 @@ impl Board {
         self.at_position(position)
             .as_piece()
             .map(|piece| piece.color)
+    }
+
+    /// Move contents from one position to another, leaving an empty tile behind.
+    pub fn move_slot(&mut self, source: Position, dest: Position) {
+        *self.at_position_mut(dest) = self.at_position(source);
+        *self.at_position_mut(source) = Slot::Empty;
+    }
+
+    /// Modify self with the result of a turn. Assumes that `turn` is a valid value returned by
+    /// `is_valid_move`!
+    pub fn apply_turn(&mut self, turn: &Turn) {
+        match turn.half_move {
+            HalfMove::Standard {
+                source,
+                dest,
+                capture: _,
+            } => self.move_slot(source, dest),
+            HalfMove::Castle(castle_type) => {
+                let row = match turn.player {
+                    Color::White => 0,
+                    Color::Black => 7,
+                };
+                match castle_type {
+                    CastleType::Queenside => {
+                        // Move king
+                        self.move_slot(
+                            Position::new(4, row).unwrap(),
+                            Position::new(2, row).unwrap(),
+                        );
+                        // Move rook
+                        self.move_slot(
+                            Position::new(0, row).unwrap(),
+                            Position::new(3, row).unwrap(),
+                        );
+                    }
+                    CastleType::Kingside => {
+                        // Move king
+                        self.move_slot(
+                            Position::new(4, row).unwrap(),
+                            Position::new(6, row).unwrap(),
+                        );
+                        // Move rook
+                        self.move_slot(
+                            Position::new(7, row).unwrap(),
+                            Position::new(5, row).unwrap(),
+                        );
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -763,6 +897,26 @@ impl Turn {
             HalfMove::Castle(_) => None,
         }
     }
+
+    /// Create copy of self with field changed as if it was the opposite players turn, flipping
+    /// the associated positions.
+    pub fn to_opposite(&self) -> Self {
+        Self {
+            player: self.player.opposite(),
+            half_move: match self.half_move {
+                HalfMove::Castle(castle_type) => HalfMove::Castle(castle_type),
+                HalfMove::Standard {
+                    source,
+                    dest,
+                    capture,
+                } => HalfMove::Standard {
+                    source: source.as_other_color(),
+                    dest: dest.as_other_color(),
+                    capture: capture.map(|(position, kind)| (position.as_other_color(), kind)),
+                },
+            },
+        }
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -844,12 +998,11 @@ impl Game {
             Err(error) => return MoveResult::Illegal(self, error),
         };
 
+        // Move the piece on the board.
+        self.board.apply_turn(&turn);
+
         // Add the turn to the history
         self.history.push(turn);
-
-        // Move the piece on the board.
-        *self.board.at_position_mut(to) = self.board.at_position(from);
-        *self.board.at_position_mut(from) = Slot::Empty;
 
         // Calculate the check state of the new board.
         let check_state = self
