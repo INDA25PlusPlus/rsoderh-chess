@@ -1041,6 +1041,11 @@ impl Game {
         }
     }
 
+    /// Creates a new game with the standard positions, and white as the starting player.
+    pub fn new_standard() -> Self {
+        Self::new(Board::new_standard(), Color::White)
+    }
+
     /// Access the current game board.
     pub fn board(&self) -> &Board {
         &self.board
@@ -1102,6 +1107,14 @@ impl Game {
         self.turn = self.turn.opposite();
 
         MoveResult::Ongoing(self, check_state_ongoing)
+    }
+
+    /// Returns iterator of positions which a piece
+    pub fn valid_moves(&self, position: Position) -> Option<Box<[Position]>> {
+        self.board
+            .view()
+            .valid_moves_from(position, self.turn, &self.history)
+            .map(|moves| moves.collect())
     }
 }
 
