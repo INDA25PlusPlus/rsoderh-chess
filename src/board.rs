@@ -66,6 +66,16 @@ impl Slot {
             Slot::Occupied(piece) => Some(piece),
         }
     }
+
+    pub fn to_opposite(&self) -> Self {
+        match *self {
+            Slot::Occupied(Piece { kind, color }) => Slot::Occupied(Piece {
+                kind,
+                color: color.opposite(),
+            }),
+            Slot::Empty => Slot::Empty,
+        }
+    }
 }
 
 impl Debug for Slot {
@@ -238,38 +248,197 @@ impl Board {
         Some(Self(slots))
     }
 
-    /// Mirror board along the y-axis and flip the colors of the pieces, as if
-    /// it was the opposite players turn.
-    pub fn to_inverted(&self) -> Self {
-        let mut result = self.clone();
-        // let mut new_board = result.positions;
+    /// Return view object of board, used to read it's content, while allowing efficient temporary
+    /// modifications.
+    pub fn view<'a>(&'a self) -> BoardView<'a> {
+        BoardView {
+            board: self,
+            modifications: Vec::new(),
+            as_opposite: false,
+        }
+    }
 
-        for (row, positions) in result.0.iter_mut().enumerate() {
-            // Flip row order
-            *positions = self.0[7 - row];
+    // Access the slot at `position`.
+    pub fn at_position(&self, position: Position) -> Slot {
+        self.0[position.row.get() as usize][position.column.get() as usize]
+    }
 
-            // Swap colors.
-            for slot in positions.iter_mut() {
-                match slot {
-                    Slot::Empty => {}
-                    Slot::Occupied(piece) => {
-                        piece.color = piece.color.opposite();
+    // Access mutable reference to the slot at `position`.
+    pub fn at_position_mut(&mut self, position: Position) -> &mut Slot {
+        &mut self.0[position.row.get() as usize][position.column.get() as usize]
+    }
+
+    /// Move contents from one position to another, leaving an empty tile behind.
+    pub fn move_slot(&mut self, source: Position, dest: Position) {
+        *self.at_position_mut(dest) = self.at_position(source);
+        *self.at_position_mut(source) = Slot::Empty;
+    }
+
+    /// Modify self with the result of a turn. Assumes that `turn` is a valid value returned by
+    /// `is_valid_move`!
+    pub fn apply_turn(&mut self, turn: &Turn) {
+        match turn.half_move {
+            HalfMove::Standard {
+                source,
+                dest,
+                capture: _,
+            } => self.move_slot(source, dest),
+            HalfMove::Castle(castle_type) => {
+                let row = match turn.player {
+                    Color::White => 0,
+                    Color::Black => 7,
+                };
+                match castle_type {
+                    CastleType::Queenside => {
+                        // Move king
+                        self.move_slot(
+                            Position::new(4, row).unwrap(),
+                            Position::new(2, row).unwrap(),
+                        );
+                        // Move rook
+                        self.move_slot(
+                            Position::new(0, row).unwrap(),
+                            Position::new(3, row).unwrap(),
+                        );
+                    }
+                    CastleType::Kingside => {
+                        // Move king
+                        self.move_slot(
+                            Position::new(4, row).unwrap(),
+                            Position::new(6, row).unwrap(),
+                        );
+                        // Move rook
+                        self.move_slot(
+                            Position::new(7, row).unwrap(),
+                            Position::new(5, row).unwrap(),
+                        );
                     }
                 }
             }
         }
-        result
+    }
+}
+
+impl Debug for Board {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("\n     +--+--+--+--+--+--+--+--+")?;
+        for (i, row) in self.0.iter().enumerate().rev() {
+            write!(f, "\n    {}|", i + 1)?;
+
+            for slot in row.iter() {
+                match slot {
+                    Slot::Empty => {
+                        f.write_str("  |")?;
+                    }
+                    Slot::Occupied(piece) => {
+                        f.write_char(match piece.color {
+                            Color::Black => 'b',
+                            Color::White => 'w',
+                        })?;
+                        f.write_char(match piece.kind {
+                            PieceKind::Pawn => 'p',
+                            PieceKind::Knight => 'n',
+                            PieceKind::Bishop => 'b',
+                            PieceKind::Rook => 'r',
+                            PieceKind::Queen => 'q',
+                            PieceKind::King => 'k',
+                        })?;
+                        f.write_char('|')?;
+                    }
+                }
+            }
+        }
+        f.write_str("\n     +--+--+--+--+--+--+--+--+")?;
+        f.write_str("\n       a  b  c  d  e  f  g  h\n")?;
+
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Hash)]
+pub struct BoardView<'a> {
+    board: &'a Board,
+    /// List of modifications: positions changed to show a new value. Conceptually these are applied
+    /// before the board is flipped.
+    modifications: Vec<(Position, Slot)>,
+    as_opposite: bool,
+}
+
+impl<'a> BoardView<'a> {
+    /// Create new view with the board mirrored along the y-axis and the colors flipped, as if it
+    /// was the opposite players turn. vertically and with the colors swapped.
+    pub fn to_opposite(&self) -> Self {
+        Self {
+            modifications: self.modifications.clone(),
+            as_opposite: !self.as_opposite,
+            ..*self
+        }
     }
 
-    pub fn positioned_slots(&self) -> impl Iterator<Item = (Position, &Slot)> {
-        self.0.iter().enumerate().flat_map(|(row, row_slots)| {
-            row_slots.iter().enumerate().map(move |(column, slot)| {
-                (
-                    Position::new(column as u8, row as u8).expect("indices are in 0..8"),
-                    slot,
-                )
+    /// Create new view with the slot at the position set to the given value.
+    pub fn with_slot(&self, position: Position, slot: Slot) -> Self {
+        let mut view = self.clone();
+        let modification = if self.as_opposite {
+            (position.as_other_color(), slot.to_opposite())
+        } else {
+            (position, slot)
+        };
+        view.modifications.push(modification);
+        view
+    }
+    /// Create new view with a slot moved, leaving an empty tile behind.
+    pub fn with_moved_slot(&self, source: Position, dest: Position) -> Self {
+        self.with_slot(dest, self.at_position(source))
+            .with_slot(source, Slot::Empty)
+    }
+
+    pub fn at_position(&self, position: Position) -> Slot {
+        let unflipped_position = if self.as_opposite {
+            position.as_other_color()
+        } else {
+            position
+        };
+
+        let unflipped_slot = self
+            .modifications
+            .iter()
+            .rev()
+            .filter_map(|(position, slot)| {
+                if *position == unflipped_position {
+                    Some(*slot)
+                } else {
+                    None
+                }
             })
-        })
+            .next()
+            .unwrap_or_else(|| {
+                // Slot hasn't been modified, get real value.
+                self.board.at_position(unflipped_position)
+            });
+        if self.as_opposite {
+            unflipped_slot.to_opposite()
+        } else {
+            unflipped_slot
+        }
+    }
+
+    /// Get the color of the piece at `position`, if there is a piece there.
+    pub fn color_at_position(&self, position: Position) -> Option<Color> {
+        self.at_position(position)
+            .as_piece()
+            .map(|piece| piece.color)
+    }
+
+    pub fn positioned_slots(&self) -> impl Iterator<Item = (Position, Slot)> {
+        std::iter::repeat_n(0..8, 8)
+            .enumerate()
+            .flat_map(move |(row, columns)| {
+                columns.map(move |column| {
+                    let position =
+                        Position::new(column as u8, row as u8).expect("indices are in 0..8");
+                    (position, self.at_position(position))
+                })
+            })
     }
 
     /// Checks if a move is valid, without calculating the check state, returning a populated turn
@@ -298,18 +467,11 @@ impl Board {
         //   7.4 and that neither the king's original position nor the position which the king
         //       passes through are under attack.
 
-        // misc
-        // TODO: En passant isn't valid.
-        // TODO: Castling is currently considered an invalid move.
-        // TODO: Apparently the position which the king skips over when castling can't be attacked
-        //   for whatever reason.
-        // TODO: Castling isn't valid if the king leaves, goes over, or moves into an attacked square.
-
         // Invert if black so we can assume that white is the current player.
         let (board, from, to, turn_history) = match turn {
             Color::White => (self, from, to, turn_history.into()),
             Color::Black => (
-                &self.to_inverted(),
+                &self.to_opposite(),
                 from.as_other_color(),
                 to.as_other_color(),
                 turn_history
@@ -522,11 +684,8 @@ impl Board {
         // - That the move isn't repeated
         let turn = self.is_valid_move_ignoring_check(from, to, turn_player, turn_history)?;
 
-        // Create clone with move applied, and calculate if it's in check (yes, this feels very
-        // ugly).
-        let mut moved_board = self.clone();
-        *moved_board.at_position_mut(to) = moved_board.at_position(from);
-        *moved_board.at_position_mut(from) = Slot::Empty;
+        // Create view with move applied, and calculate if it's in check.
+        let moved_board = self.with_moved_slot(from, to);
 
         if let Some(attacked_position) = moved_board
             .get_check_state_for_color(turn_player, turn_history)
@@ -596,14 +755,18 @@ impl Board {
         self.positioned_slots()
             .filter_map(move |(attacker_position, slot)| match slot {
                 Slot::Occupied(piece) if piece.color == color => {
-                    let mut move_destinations = self
-                        // TODO: I'm pretty sure it isn't valid to skip checking the check state
-                        //   here, but checking it creates infinite recursion, which I don't know
-                        //   how to avoid.
-                        .valid_moves_ignoring_check_from(attacker_position, color, turn_history)
-                        .expect("position to be occupied");
-
-                    if move_destinations.any(|dest| dest == position) {
+                    // TODO: I'm pretty sure it isn't valid to skip checking the check state
+                    //   here, but checking it creates infinite recursion, which I don't know
+                    //   how to avoid.
+                    if self
+                        .is_valid_move_ignoring_check(
+                            attacker_position,
+                            position,
+                            color,
+                            turn_history,
+                        )
+                        .is_ok()
+                    {
                         Some(attacker_position)
                     } else {
                         None
@@ -634,7 +797,7 @@ impl Board {
                 Slot::Occupied(Piece {
                     kind: PieceKind::King,
                     color,
-                }) if *color == player => {
+                }) if color == player => {
                     Some(self.get_king_check_state(position, player, turn_history))
                 }
                 _ => None,
@@ -700,12 +863,15 @@ impl Board {
             },
             position,
         ) {
+            // View of board where the king has been removed. This is necessary so that the old
+            // king's position can't block an attacker from moving to a potential new position.
+            let board_without_king = self.with_slot(position, Slot::Empty);
             // Check that potential position is empty, and that no enemy piece is attacking it.
             if
             // Skip if dest is the position castling would result in.
             dest.column().abs_diff(position.column()) <= 1
-                && self.at_position(dest) == Slot::Empty
-                && self
+                && board_without_king.at_position(dest) == Slot::Empty
+                && board_without_king
                     .pieces_attacking_position(dest, color.opposite(), turn_history)
                     .next()
                     .is_none()
@@ -722,109 +888,6 @@ impl Board {
             piece: position,
             attackers,
         })
-    }
-
-    // Access the slot at `position`.
-    pub fn at_position(&self, position: Position) -> Slot {
-        self.0[position.row.get() as usize][position.column.get() as usize]
-    }
-
-    // Access mutable reference to the slot at `position`.
-    pub fn at_position_mut(&mut self, position: Position) -> &mut Slot {
-        &mut self.0[position.row.get() as usize][position.column.get() as usize]
-    }
-
-    // Get the color of the piece at `position`, if there is a piece there.
-    pub fn color_at_position(&self, position: Position) -> Option<Color> {
-        self.at_position(position)
-            .as_piece()
-            .map(|piece| piece.color)
-    }
-
-    /// Move contents from one position to another, leaving an empty tile behind.
-    pub fn move_slot(&mut self, source: Position, dest: Position) {
-        *self.at_position_mut(dest) = self.at_position(source);
-        *self.at_position_mut(source) = Slot::Empty;
-    }
-
-    /// Modify self with the result of a turn. Assumes that `turn` is a valid value returned by
-    /// `is_valid_move`!
-    pub fn apply_turn(&mut self, turn: &Turn) {
-        match turn.half_move {
-            HalfMove::Standard {
-                source,
-                dest,
-                capture: _,
-            } => self.move_slot(source, dest),
-            HalfMove::Castle(castle_type) => {
-                let row = match turn.player {
-                    Color::White => 0,
-                    Color::Black => 7,
-                };
-                match castle_type {
-                    CastleType::Queenside => {
-                        // Move king
-                        self.move_slot(
-                            Position::new(4, row).unwrap(),
-                            Position::new(2, row).unwrap(),
-                        );
-                        // Move rook
-                        self.move_slot(
-                            Position::new(0, row).unwrap(),
-                            Position::new(3, row).unwrap(),
-                        );
-                    }
-                    CastleType::Kingside => {
-                        // Move king
-                        self.move_slot(
-                            Position::new(4, row).unwrap(),
-                            Position::new(6, row).unwrap(),
-                        );
-                        // Move rook
-                        self.move_slot(
-                            Position::new(7, row).unwrap(),
-                            Position::new(5, row).unwrap(),
-                        );
-                    }
-                }
-            }
-        }
-    }
-}
-
-impl Debug for Board {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("\n     +--+--+--+--+--+--+--+--+")?;
-        for (i, row) in self.0.iter().enumerate().rev() {
-            write!(f, "\n    {}|", i + 1)?;
-
-            for slot in row.iter() {
-                match slot {
-                    Slot::Empty => {
-                        f.write_str("  |")?;
-                    }
-                    Slot::Occupied(piece) => {
-                        f.write_char(match piece.color {
-                            Color::Black => 'b',
-                            Color::White => 'w',
-                        })?;
-                        f.write_char(match piece.kind {
-                            PieceKind::Pawn => 'p',
-                            PieceKind::Knight => 'n',
-                            PieceKind::Bishop => 'b',
-                            PieceKind::Rook => 'r',
-                            PieceKind::Queen => 'q',
-                            PieceKind::King => 'k',
-                        })?;
-                        f.write_char('|')?;
-                    }
-                }
-            }
-        }
-        f.write_str("\n     +--+--+--+--+--+--+--+--+")?;
-        f.write_str("\n       a  b  c  d  e  f  g  h\n")?;
-
-        Ok(())
     }
 }
 
@@ -992,6 +1055,7 @@ impl Game {
         // Check if the move is valid.
         let turn = match self
             .board
+            .view()
             .is_valid_move(from, to, self.turn, self.history())
         {
             Ok(turn) => turn,
@@ -1007,6 +1071,7 @@ impl Game {
         // Calculate the check state of the new board.
         let check_state = self
             .board
+            .view()
             .get_check_state_for_color(self.turn.opposite(), self.history())
             .max_by_key(|check_state| match check_state {
                 CheckState::Safe(_) => 0,

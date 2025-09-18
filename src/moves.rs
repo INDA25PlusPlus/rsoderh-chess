@@ -20,9 +20,10 @@ where
 fn white_pawn_moves(from: Position) -> Vec<Position> {
     let mut positions: Vec<_> = translated_positions(from, [(0, 1), (-1, 1), (1, 1)]).collect();
     if from.row() == 1
-        && let Some(position) = from.translated((0, 2)) {
-            positions.push(position);
-        }
+        && let Some(position) = from.translated((0, 2))
+    {
+        positions.push(position);
+    }
 
     positions
 }
@@ -119,13 +120,14 @@ fn white_king_moves(from: Position) -> impl Iterator<Item = Position> {
             (-1, 1),
             (0, 1),
         ],
-    ).collect::<Vec<_>>();
-    
+    )
+    .collect::<Vec<_>>();
+
     if from.column() == 4 && from.row() == 0 {
         positions.push(Position::new(2, 0).unwrap());
         positions.push(Position::new(6, 0).unwrap());
     }
-    
+
     positions.into_iter()
 }
 
@@ -472,7 +474,7 @@ mod tests {
             ],
         );
     }
-    
+
     #[test]
     fn king_castling_white() {
         assert_moves_eq(
@@ -494,7 +496,7 @@ mod tests {
             ],
         );
     }
-    
+
     #[test]
     fn king_castling_black() {
         assert_moves_eq(
