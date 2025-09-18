@@ -1027,7 +1027,7 @@ pub enum MoveResult {
 #[derive(Debug, PartialEq, Eq)]
 pub struct Game {
     board: Board,
-    turn: Color,
+    pub turn: Color,
     history: Vec<Turn>,
 }
 
