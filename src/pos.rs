@@ -1,16 +1,21 @@
 use std::fmt::Debug;
 
+
 /// Represents a coordinate on a chess board. Wrapper around u8 guaranteed to be within 0..8
-/// (exclusive). 
+/// (exclusive).
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct PositionIndex(u8);
 
 impl PositionIndex {
-    fn new(value: u8) -> Option<Self> {
+    pub fn new(value: u8) -> Option<Self> {
         match value {
             0..8 => Some(Self(value)),
             _ => None,
         }
+    }
+    
+    pub fn get(&self) -> u8 {
+        self.0
     }
 }
 
