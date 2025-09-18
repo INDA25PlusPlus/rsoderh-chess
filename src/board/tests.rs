@@ -995,3 +995,34 @@ fn checkmate_cover_self() {
         })],
     );
 }
+
+// TODO: This case is incorrectly considered a checkmate.
+#[test]
+#[should_panic]
+fn check_blockable_attacker() {
+    assert_eq!(
+        Board::parse_str(
+            "
+             +--+--+--+--+--+--+--+--+
+            8|  |  |br|  |br|  |  |  |
+            7|  |  |  |  |  |  |  |  |
+            6|  |  |  |  |  |  |  |br|
+            5|  |  |  |wk|  |bq|  |  |
+            4|  |  |  |  |  |  |  |br|
+            3|  |  |  |  |wr|  |  |  |
+            2|  |  |  |  |  |  |  |  |
+            1|  |  |  |  |  |  |  |  |
+             +--+--+--+--+--+--+--+--+
+               a  b  c  d  e  f  g  h
+            "
+        )
+        .unwrap()
+        .view()
+        .get_check_state_for_color(Color::White, &[])
+        .collect::<Vec<_>>(),
+        vec![CheckState::Check(AttackedPosition {
+            piece: Position::parse("d5").unwrap(),
+            attackers: [Position::parse("f5").unwrap()].into()
+        })],
+    );
+}
