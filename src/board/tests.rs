@@ -49,13 +49,13 @@ impl Game {
             let is_last_move = iter.peek().is_none();
 
             match self.perform_move(source, dest) {
+                result if is_last_move => return result,
                 MoveResult::Illegal(_, ref move_type) => {
                     panic!(
                         "Move {:?} -> {:?} is invalid: {:?}.",
                         source, dest, move_type
                     );
                 }
-                result if is_last_move => return result,
                 MoveResult::Ongoing(game, _) => {
                     self = game;
                 }
@@ -587,4 +587,87 @@ fn history() {
             }
         ]
     )
+}
+
+#[test]
+fn en_passant() {
+    let game = Game::new(
+        Board::parse_str(
+            "
+             +--+--+--+--+--+--+--+--+
+            8|  |  |  |  |  |  |  |  |
+            7|bp|  |  |  |  |  |  |  |
+            6|  |  |  |  |  |  |  |  |
+            5|  |wp|  |  |  |  |  |  |
+            4|  |  |  |  |  |  |  |  |
+            3|  |  |  |  |  |  |  |  |
+            2|  |  |  |  |  |  |  |  |
+            1|  |  |  |  |  |  |  |  |
+             +--+--+--+--+--+--+--+--+
+               a  b  c  d  e  f  g  h
+            ",
+        )
+        .unwrap(),
+        Color::Black,
+    );
+
+    match game.apply_moves([("a7", "a5"), ("b5", "a6")]) {
+        MoveResult::Ongoing(_, CheckOutcome::Safe) => {}
+        result => panic!("Unexpected move result: {:?}", result),
+    }
+}
+#[test]
+fn en_passant_illegal_pawn() {
+    let game = Game::new(
+        Board::parse_str(
+            "
+            +--+--+--+--+--+--+--+--+
+            8|  |  |  |  |  |  |  |  |
+            7|  |  |  |  |  |  |  |  |
+            6|bp|  |  |  |  |  |  |  |
+            5|  |wp|  |  |  |  |  |  |
+            4|  |  |  |  |  |  |  |  |
+            3|  |  |  |  |  |  |  |  |
+            2|  |  |  |  |  |  |  |  |
+            1|  |  |  |  |  |  |  |  |
+             +--+--+--+--+--+--+--+--+
+               a  b  c  d  e  f  g  h
+            ",
+        )
+        .unwrap(),
+        Color::Black,
+    );
+
+    match game.apply_moves([("a6", "a5"), ("b5", "a6")]) {
+        MoveResult::Illegal(_, IllegalMoveType::Position) => {}
+        result => panic!("Unexpected move result: {:?}", result),
+    }
+}
+
+#[test]
+fn en_passant_illegal_rook() {
+    let game = Game::new(
+        Board::parse_str(
+            "
+            +--+--+--+--+--+--+--+--+
+            8|  |  |  |  |  |  |  |  |
+            7|  |  |  |  |  |  |  |  |
+            6|br|  |  |  |  |  |  |  |
+            5|  |wp|  |  |  |  |  |  |
+            4|  |  |  |  |  |  |  |  |
+            3|  |  |  |  |  |  |  |  |
+            2|  |  |  |  |  |  |  |  |
+            1|  |  |  |  |  |  |  |  |
+             +--+--+--+--+--+--+--+--+
+               a  b  c  d  e  f  g  h
+            ",
+        )
+        .unwrap(),
+        Color::Black,
+    );
+
+    match game.apply_moves([("a6", "a5"), ("b5", "a6")]) {
+        MoveResult::Illegal(_, IllegalMoveType::Position) => {}
+        result => panic!("Unexpected move result: {:?}", result),
+    }
 }

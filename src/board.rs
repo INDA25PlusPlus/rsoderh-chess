@@ -277,7 +277,7 @@ impl Board {
         from: Position,
         to: Position,
         turn: Color,
-        _turn_history: &[Turn],
+        turn_history: &[Turn],
     ) -> Result<Turn, IllegalMoveType> {
         // Things which must be true:
         // 1. Piece at source location
@@ -286,7 +286,8 @@ impl Board {
         //    `naive_moves_from_piece`)
         // 4. No pieces in the way between source and destination
         // 5. There isn't a friendly piece at destination
-        // 6. If pawn and moving diagonally, that there is an enemy piece there
+        // 6. If pawn and moving diagonally, that there is an enemy piece there OR that a pawn just
+        //    moved two spaces last turn skipping over that position (i.e. en passant).
 
         // misc
         // TODO: En passant isn't valid.
@@ -371,11 +372,37 @@ impl Board {
 
         // Check 6.
         if piece.kind == PieceKind::Pawn
-            && from.column() != to.column()
             // Move is diagnonal.
-            && self.color_at_position(to) != Some(Color::Black)
+            && from.column() != to.column()
+            && (board.color_at_position(to) != Some(Color::Black))
         {
-            return Err(IllegalMoveType::Position);
+            if let Some(dest_above) = to.translated((0, 1))
+                && let Some(dest_below) = to.translated((0, -1))
+                && let Some(Turn {
+                    player,
+                    half_move:
+                        HalfMove::Standard {
+                            source: turn_source,
+                            dest: turn_dest,
+                            capture: _,
+                        },
+                }) = turn_history.last()
+                && (*player == Color::Black)
+                && *turn_source == dest_above
+                && *turn_dest == dest_below
+                && board.at_position(*turn_dest).into_piece()
+                    == Some(Piece::new(PieceKind::Pawn, Color::Black))
+            {
+                // Pawn captured enemy pawn en passant.
+                eprintln!("en passant");
+                capture = Some((
+                    to.translated((0, -1))
+                        .expect("the outer guard can't pass unless this translation succeeded"),
+                    PieceKind::Pawn,
+                ))
+            } else {
+                return Err(IllegalMoveType::Position);
+            }
         }
 
         // Invert back if black
