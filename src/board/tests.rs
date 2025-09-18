@@ -13,6 +13,24 @@ where
     assert_eq!(a, b);
 }
 
+// Based on source: https://stackoverflow.com/a/58126569/15507414
+macro_rules! assert_match {
+    ($value:expr, $pattern:pat $(,)?) => {{
+        let value = &$value;
+
+        if let $pattern = value {
+        } else {
+            panic!(
+                r#"assertion `matches!(value, pattern)` failed:
+   value: {:?},
+ pattern: {}"#,
+                value,
+                stringify!($pattern)
+            )
+        }
+    }};
+}
+
 impl Game {
     /// Apply moves as pairs of cell coordinate strings, like "d4". The `MoveResult` of the final
     /// move is returned. Panics if any of the strings aren't valid positions, if any result in
@@ -110,12 +128,18 @@ fn simple_game() {
 
     let result = game.apply_moves([("d2", "d4"), ("e7", "e5"), ("c1", "f4")]);
 
-    assert_eq!(
-        result,
+    match result {
         MoveResult::Ongoing(
             Game {
                 turn: Color::Black,
-                board: Board::parse_str(
+                board,
+                history: _,
+            },
+            CheckOutcome::Safe,
+        ) => {
+            assert_eq!(
+                board,
+                Board::parse_str(
                     "
                      +--+--+--+--+--+--+--+--+
                     8|br|bn|bb|bq|bk|bb|bn|br|
@@ -130,11 +154,13 @@ fn simple_game() {
                        a  b  c  d  e  f  g  h
                     "
                 )
-                .unwrap(),
-            },
-            CheckOutcome::Safe
-        )
-    );
+                .unwrap()
+            )
+        }
+        result => {
+            panic!("Unexpected game result: {:?}", result);
+        }
+    }
 }
 
 #[test]
@@ -197,7 +223,7 @@ fn check() {
             "
         )
         .unwrap()
-        .get_check_state_for_color(Color::White)
+        .get_check_state_for_color(Color::White, &[])
         .collect::<Vec<_>>(),
         vec![CheckState::Checkmate(AttackedPosition {
             piece: Position::parse("e1").unwrap(),
@@ -221,7 +247,7 @@ fn check() {
             "
         )
         .unwrap()
-        .get_check_state_for_color(Color::White)
+        .get_check_state_for_color(Color::White, &[])
         .collect::<Vec<_>>(),
         vec![CheckState::Check(AttackedPosition {
             piece: Position::parse("e1").unwrap(),
@@ -251,31 +277,31 @@ fn misc_valid_moves_ignoring_check() {
 
     assert_moves_eq(
         board
-            .valid_moves_ignoring_check_from(Color::White, Position::parse("a1").unwrap())
+            .valid_moves_ignoring_check_from(Position::parse("a1").unwrap(), Color::White, &[])
             .unwrap(),
         ["a2", "a3", "a4", "a5", "a6", "a7", "a8"].map(|string| Position::parse(string).unwrap()),
     );
     assert_moves_eq(
         board
-            .valid_moves_ignoring_check_from(Color::White, Position::parse("b1").unwrap())
+            .valid_moves_ignoring_check_from(Position::parse("b1").unwrap(), Color::White, &[])
             .unwrap(),
         ["a3", "c3", "d2"].map(|string| Position::parse(string).unwrap()),
     );
     assert_moves_eq(
         board
-            .valid_moves_ignoring_check_from(Color::White, Position::parse("b2").unwrap())
+            .valid_moves_ignoring_check_from(Position::parse("b2").unwrap(), Color::White, &[])
             .unwrap(),
         ["b3", "b4"].map(|string| Position::parse(string).unwrap()),
     );
     assert_moves_eq(
         board
-            .valid_moves_ignoring_check_from(Color::White, Position::parse("c1").unwrap())
+            .valid_moves_ignoring_check_from(Position::parse("c1").unwrap(), Color::White, &[])
             .unwrap(),
         ["d2", "e3", "f4", "g5", "h6"].map(|string| Position::parse(string).unwrap()),
     );
     assert_moves_eq(
         board
-            .valid_moves_ignoring_check_from(Color::White, Position::parse("d1").unwrap())
+            .valid_moves_ignoring_check_from(Position::parse("d1").unwrap(), Color::White, &[])
             .unwrap(),
         [
             "a4", "b3", "c2", "e2", "f3", "g4", "h5", "d2", "d3", "d4", "d5", "d6", "d7", "d8",
@@ -284,7 +310,7 @@ fn misc_valid_moves_ignoring_check() {
     );
     assert_moves_eq(
         board
-            .valid_moves_ignoring_check_from(Color::White, Position::parse("e1").unwrap())
+            .valid_moves_ignoring_check_from(Position::parse("e1").unwrap(), Color::White, &[])
             .unwrap(),
         ["d2", "e2", "f2", "f1"].map(|string| Position::parse(string).unwrap()),
     );
@@ -309,37 +335,41 @@ fn pawn_moves() {
     )
     .unwrap();
 
-    assert_eq!(
+    assert_match!(
         board.is_valid_move(
-            Color::White,
             Position::parse("b2").unwrap(),
             Position::parse("b4").unwrap(),
-        ),
-        Ok(())
-    );
-    assert_eq!(
-        board.is_valid_move(
             Color::White,
+            &[],
+        ),
+        Ok(_),
+    );
+    assert_match!(
+        board.is_valid_move(
             Position::parse("c3").unwrap(),
             Position::parse("c4").unwrap(),
-        ),
-        Ok(())
-    );
-    assert_eq!(
-        board.is_valid_move(
             Color::White,
+            &[],
+        ),
+        Ok(_),
+    );
+    assert_match!(
+        board.is_valid_move(
             Position::parse("c3").unwrap(),
             Position::parse("c5").unwrap(),
-        ),
-        Err(IllegalMoveType::Position)
-    );
-    assert_eq!(
-        board.is_valid_move(
             Color::White,
+            &[],
+        ),
+        Err(IllegalMoveType::Position),
+    );
+    assert_match!(
+        board.is_valid_move(
             Position::parse("d6").unwrap(),
             Position::parse("e7").unwrap(),
+            Color::White,
+            &[],
         ),
-        Ok(())
+        Ok(_),
     );
 }
 
@@ -383,25 +413,28 @@ fn basic_illegal_moves() {
 
     assert_eq!(
         board.is_valid_move(
-            Color::White,
             Position::parse("a1").unwrap(),
             Position::parse("a2").unwrap(),
+            Color::White,
+            &[],
         ),
         Err(IllegalMoveType::NoPiece),
     );
     assert_eq!(
         board.is_valid_move(
-            Color::White,
             Position::parse("e7").unwrap(),
             Position::parse("e6").unwrap(),
+            Color::White,
+            &[],
         ),
         Err(IllegalMoveType::Color),
     );
     assert_eq!(
         board.is_valid_move(
-            Color::White,
             Position::parse("b3").unwrap(),
             Position::parse("b5").unwrap(),
+            Color::White,
+            &[],
         ),
         Err(IllegalMoveType::Position),
     );
@@ -428,9 +461,10 @@ fn illegal_move_check_mate_move_into() {
 
     assert_eq!(
         board.is_valid_move(
-            Color::White,
             Position::parse("e4").unwrap(),
             Position::parse("d4").unwrap(),
+            Color::White,
+            &[],
         ),
         Err(IllegalMoveType::Checkmate(AttackedPosition {
             piece: Position::parse("d4").unwrap(),
@@ -460,9 +494,10 @@ fn illegal_move_check_mate_not_move_away() {
 
     assert_eq!(
         board.is_valid_move(
-            Color::White,
             Position::parse("g4").unwrap(),
             Position::parse("g5").unwrap(),
+            Color::White,
+            &[],
         ),
         Err(IllegalMoveType::Checkmate(AttackedPosition {
             piece: Position::parse("d4").unwrap(),
@@ -492,13 +527,64 @@ fn illegal_move_check_mate_not_capture() {
 
     assert_eq!(
         board.is_valid_move(
-            Color::White,
             Position::parse("f7").unwrap(),
             Position::parse("f6").unwrap(),
+            Color::White,
+            &[],
         ),
         Err(IllegalMoveType::Checkmate(AttackedPosition {
             piece: Position::parse("d4").unwrap(),
             attackers: vec![Position::parse("d7").unwrap()].into(),
         })),
     );
+}
+
+#[test]
+fn history() {
+    let game = Game::new(
+        Board::parse_str(
+            "
+             +--+--+--+--+--+--+--+--+
+            8|  |  |  |  |  |  |  |  |
+            7|  |  |  |  |  |  |  |  |
+            6|  |  |  |  |  |  |  |  |
+            5|  |  |  |  |  |  |  |  |
+            4|  |  |  |wn|  |  |  |  |
+            3|  |  |  |  |  |  |  |  |
+            2|  |br|  |  |  |  |  |  |
+            1|  |  |  |  |  |  |  |  |
+             +--+--+--+--+--+--+--+--+
+               a  b  c  d  e  f  g  h
+            ",
+        )
+        .unwrap(),
+        Color::White,
+    );
+
+    let game = match game.apply_moves([("d4", "b5"), ("b2", "b5")]) {
+        MoveResult::Ongoing(game, CheckOutcome::Safe) => game,
+        result => panic!("Unexpected move result: {:?}", result),
+    };
+
+    assert_eq!(
+        game.history(),
+        [
+            Turn {
+                player: Color::White,
+                half_move: HalfMove::Standard {
+                    source: Position::parse("d4").unwrap(),
+                    dest: Position::parse("b5").unwrap(),
+                    capture: None
+                }
+            },
+            Turn {
+                player: Color::Black,
+                half_move: HalfMove::Standard {
+                    source: Position::parse("b2").unwrap(),
+                    dest: Position::parse("b5").unwrap(),
+                    capture: Some((Position::parse("b5").unwrap(), PieceKind::Knight)),
+                }
+            }
+        ]
+    )
 }

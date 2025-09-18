@@ -269,15 +269,16 @@ impl Board {
         })
     }
 
-    /// Checks if a move is valid, without calculating the check state, returning the reason if it
-    /// isn't. This is like `is_valid_move`, except it considers move which result in check mate as
-    /// illegal.
+    /// Checks if a move is valid, without calculating the check state, returning a populated turn
+    /// object if it is, or the reason if it isn't. This is like `is_valid_move`, except it
+    /// considers moves which result in check mate as illegal.
     pub fn is_valid_move_ignoring_check(
         &self,
-        turn: Color,
         from: Position,
         to: Position,
-    ) -> Result<(), IllegalMoveType> {
+        turn: Color,
+        _turn_history: &[Turn],
+    ) -> Result<Turn, IllegalMoveType> {
         // Things which must be true:
         // 1. Piece at source location
         // 2. Piece has current player's color
@@ -306,6 +307,9 @@ impl Board {
 
         let source_slot = board.at_position(from);
         let dest_slot = board.at_position(to);
+
+        // For most valid moves, a capture is made if the destination slot has a piece.
+        let mut capture = dest_slot.as_piece().map(|piece| (to, piece.kind));
 
         // Check 1.
         let Slot::Occupied(piece) = source_slot else {
@@ -374,22 +378,41 @@ impl Board {
             return Err(IllegalMoveType::Position);
         }
 
-        Ok(())
+        // Invert back if black
+        let (from, to, capture) = match turn {
+            Color::White => (from, to, capture),
+            Color::Black => (
+                from.as_other_color(),
+                to.as_other_color(),
+                capture.map(|(position, kind)| (position.as_other_color(), kind)),
+            ),
+        };
+
+        Ok(Turn {
+            player: turn,
+            half_move: HalfMove::Standard {
+                source: from,
+                dest: to,
+                capture,
+            },
+        })
     }
 
-    /// Checks if a move is valid for the specified player, returning the reason if it isn't.
+    /// Checks if a move is valid for the specified player, returning a populated turn object if it
+    /// is, or the reason if it isn't.
     pub fn is_valid_move(
         &self,
-        turn: Color,
         from: Position,
         to: Position,
-    ) -> Result<(), IllegalMoveType> {
+        turn_player: Color,
+        turn_history: &[Turn],
+    ) -> Result<Turn, IllegalMoveType> {
         // - If king that destination isn't check mate
         // - If source protected king
         // - If in check, then source must be king
         //   ^ can be combined as check for check mate after move.
         // - That the move isn't repeated
-        self.is_valid_move_ignoring_check(turn, from, to)?;
+        let turn = self.is_valid_move_ignoring_check(from, to, turn_player, turn_history)?;
 
         // Create clone with move applied, and calculate if it's in check (yes, this feels very
         // ugly).
@@ -398,7 +421,7 @@ impl Board {
         *moved_board.at_position_mut(from) = Slot::Empty;
 
         if let Some(attacked_position) = moved_board
-            .get_check_state_for_color(turn)
+            .get_check_state_for_color(turn_player, turn_history)
             .filter_map(|state| match state {
                 CheckState::Checkmate(attacked_position) => Some(attacked_position),
                 // Note: `get_check_state_for_color` will return check if the current player can
@@ -413,13 +436,14 @@ impl Board {
             return Err(IllegalMoveType::Checkmate(attacked_position));
         }
 
-        Ok(())
+        Ok(turn)
     }
 
     pub fn valid_moves_ignoring_check_from(
         &self,
-        turn: Color,
         position: Position,
+        turn: Color,
+        turn_history: &[Turn],
     ) -> Option<impl Iterator<Item = Position>> {
         let piece = self.at_position(position).into_piece()?;
 
@@ -427,7 +451,7 @@ impl Board {
             moves::naive_moves_from_piece(piece, position)
                 .into_iter()
                 .filter(move |destination| {
-                    self.is_valid_move_ignoring_check(turn, position, *destination)
+                    self.is_valid_move_ignoring_check(position, *destination, turn, turn_history)
                         .is_ok()
                 }),
         )
@@ -437,8 +461,9 @@ impl Board {
     // there `None` is returned.
     pub fn valid_moves_from(
         &self,
-        turn: Color,
         position: Position,
+        turn: Color,
+        turn_history: &[Turn],
     ) -> Option<impl Iterator<Item = Position>> {
         let piece = self.at_position(position).into_piece()?;
 
@@ -446,7 +471,8 @@ impl Board {
             moves::naive_moves_from_piece(piece, position)
                 .into_iter()
                 .filter(move |destination| {
-                    self.is_valid_move(turn, position, *destination).is_ok()
+                    self.is_valid_move(position, *destination, turn, turn_history)
+                        .is_ok()
                 }),
         )
     }
@@ -457,6 +483,7 @@ impl Board {
         &self,
         position: Position,
         color: Color,
+        turn_history: &[Turn],
     ) -> impl Iterator<Item = Position> {
         self.positioned_slots()
             .filter_map(move |(attacker_position, slot)| match slot {
@@ -465,7 +492,7 @@ impl Board {
                         // TODO: I'm pretty sure it isn't valid to skip checking the check state
                         //   here, but checking it creates infinite recursion, which I don't know
                         //   how to avoid.
-                        .valid_moves_ignoring_check_from(color, attacker_position)
+                        .valid_moves_ignoring_check_from(attacker_position, color, turn_history)
                         .expect("position to be occupied");
 
                     if move_destinations.any(|dest| dest == position) {
@@ -488,21 +515,32 @@ impl Board {
     /// color, then you can get that kings check state like this:
     /// `self.get_check_state_for_color(...).next().unwrap()`
     ///
-    pub fn get_check_state_for_color(&self, player: Color) -> impl Iterator<Item = CheckState> {
+    pub fn get_check_state_for_color(
+        &self,
+        player: Color,
+        turn_history: &[Turn],
+    ) -> impl Iterator<Item = CheckState> {
         // Positions with pieces attacking the king.
         self.positioned_slots()
             .filter_map(move |(position, slot)| match slot {
                 Slot::Occupied(Piece {
                     kind: PieceKind::King,
                     color,
-                }) if *color == player => Some(self.get_king_check_state(position, player)),
+                }) if *color == player => {
+                    Some(self.get_king_check_state(position, player, turn_history))
+                }
                 _ => None,
             })
     }
 
-    pub fn get_king_check_state(&self, position: Position, color: Color) -> CheckState {
+    pub fn get_king_check_state(
+        &self,
+        position: Position,
+        color: Color,
+        turn_history: &[Turn],
+    ) -> CheckState {
         let attackers = self
-            .pieces_attacking_position(position, color.opposite())
+            .pieces_attacking_position(position, color.opposite(), turn_history)
             .collect::<Box<[_]>>();
 
         if attackers.is_empty() {
@@ -520,7 +558,7 @@ impl Board {
             [attacker] => {
                 // 1.
                 if self
-                    .pieces_attacking_position(*attacker, color)
+                    .pieces_attacking_position(*attacker, color, turn_history)
                     .next()
                     .is_some()
                 {
@@ -557,7 +595,7 @@ impl Board {
             // Check that potential position is empty, and that no enemy piece is attacking it.
             if self.at_position(dest) == Slot::Empty
                 && self
-                    .pieces_attacking_position(dest, color.opposite())
+                    .pieces_attacking_position(dest, color.opposite(), turn_history)
                     .next()
                     .is_none()
             {
@@ -629,6 +667,77 @@ impl Debug for Board {
     }
 }
 
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum CastleType {
+    Kingside,
+    Queenside,
+}
+
+/// Represents a half move by a player of arbitrary color.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HalfMove {
+    Standard {
+        /// The position the piece started at.
+        source: Position,
+        /// The position the piece was moved to.
+        dest: Position,
+        /// If an enemy piece was captured, this field contains it's position and type.
+        /// Note: We need to store the position, as en passant captures pieces at a position other
+        ///   than dest.
+        capture: Option<(Position, PieceKind)>,
+    },
+    Castle(CastleType),
+}
+
+/// Represents a half move performed by a player. This contains all the necessary information to
+/// reconstruct the board before or after the turn.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Turn {
+    /// The player which performed the turn
+    pub player: Color,
+    /// What occurred during the turn.
+    pub half_move: HalfMove,
+}
+
+impl Turn {
+    /// The position the moved piece started at.
+    pub fn source(&self) -> Position {
+        match self.half_move {
+            HalfMove::Standard { source, .. } => source,
+            HalfMove::Castle(_) => match self.player {
+                Color::White => Position::new(4, 0).expect("4 and 0 are within 0...8"),
+                Color::Black => Position::new(4, 7).expect("4 and 7 are within 0...8"),
+            },
+        }
+    }
+    /// The position the piece was moved to.
+    pub fn dest(&self) -> Position {
+        match self.half_move {
+            HalfMove::Standard { dest, .. } => dest,
+            HalfMove::Castle(type_) => Position::new(
+                match type_ {
+                    CastleType::Kingside => 6,
+                    CastleType::Queenside => 2,
+                },
+                match self.player {
+                    Color::White => 0,
+                    Color::Black => 7,
+                },
+            )
+            .expect("6, 2, 0, and 7 are within 0..8"),
+        }
+    }
+
+    /// If an enemy piece was captured during the move, this gives it's position and type.
+    pub fn capture(&self) -> Option<(Position, PieceKind)> {
+        match self.half_move {
+            HalfMove::Standard { capture, .. } => capture,
+            // Castling can't capture any pieces.
+            HalfMove::Castle(_) => None,
+        }
+    }
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub enum GameResult {
     /// At least one of the other player's kings is in check mate.
@@ -675,6 +784,7 @@ pub enum MoveResult {
 pub struct Game {
     board: Board,
     turn: Color,
+    history: Vec<Turn>,
 }
 
 impl Game {
@@ -683,6 +793,7 @@ impl Game {
         Self {
             board,
             turn: starting_player,
+            history: Vec::new(),
         }
     }
 
@@ -690,11 +801,24 @@ impl Game {
     pub fn board(&self) -> &Board {
         &self.board
     }
+
+    /// Access the history of half moves.
+    pub fn history(&self) -> &[Turn] {
+        &self.history
+    }
+
     pub fn perform_move(mut self, from: Position, to: Position) -> MoveResult {
         // Check if the move is valid.
-        if let Err(error) = self.board.is_valid_move(self.turn, from, to) {
-            return MoveResult::Illegal(self, error);
+        let turn = match self
+            .board
+            .is_valid_move(from, to, self.turn, self.history())
+        {
+            Ok(turn) => turn,
+            Err(error) => return MoveResult::Illegal(self, error),
         };
+
+        // Add the turn to the history
+        self.history.push(turn);
 
         // Move the piece on the board.
         *self.board.at_position_mut(to) = self.board.at_position(from);
@@ -703,7 +827,7 @@ impl Game {
         // Calculate the check state of the new board.
         let check_state = self
             .board
-            .get_check_state_for_color(self.turn.opposite())
+            .get_check_state_for_color(self.turn.opposite(), self.history())
             .max_by_key(|check_state| match check_state {
                 CheckState::Safe(_) => 0,
                 CheckState::Check(_) => 1,
@@ -720,6 +844,7 @@ impl Game {
             Some(CheckState::Checkmate(attacked_position)) => {
                 return MoveResult::Finished(FinishedGame {
                     board: self.board,
+                    history: self.history,
                     result: GameResult::Checkmate {
                         winner: self.turn,
                         attacked_king: attacked_position,
@@ -738,6 +863,7 @@ impl Game {
 #[derive(Debug, PartialEq, Eq)]
 pub struct FinishedGame {
     board: Board,
+    history: Vec<Turn>,
     result: GameResult,
 }
 
@@ -745,6 +871,11 @@ impl FinishedGame {
     /// Access the final game board.
     pub fn board(&self) -> &Board {
         &self.board
+    }
+
+    /// History of half moves applied to board.
+    pub fn history(&self) -> &[Turn] {
+        &self.history
     }
 
     /// Access the final game result.
