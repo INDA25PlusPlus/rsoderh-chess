@@ -3,7 +3,7 @@ use std::{
     hash::Hash,
 };
 
-use crate::{Color, Piece, PieceKind, Position, moves, span::PositionSpan};
+use crate::{Color, Piece, PieceKind, Position, PositionIndex, moves, span::PositionSpan};
 
 #[cfg(test)]
 mod tests;
@@ -37,6 +37,8 @@ pub enum IllegalMoveType {
     /// Tried to castle, but the king's original position or one of the positions it passed through
     /// were under attack.
     CastleAttacked,
+    /// There aren't any valid pawns at the specified column which can be promoted.
+    PromotingNoPawn,
     /// The move would have resulted in check mate for the current player.
     Checkmate(AttackedPosition),
 }
@@ -315,6 +317,24 @@ impl Board {
                     }
                 }
             }
+            HalfMove::Promotion { column, kind } => {
+                *self.at_position_mut(Position {
+                    column,
+                    row: PositionIndex::new(match turn.player {
+                        Color::White => 6,
+                        Color::Black => 1,
+                    })
+                    .expect("6 and 1 are within 0..8"),
+                }) = Slot::Empty;
+                *self.at_position_mut(Position {
+                    column,
+                    row: PositionIndex::new(match turn.player {
+                        Color::White => 7,
+                        Color::Black => 0,
+                    })
+                    .expect("7 and 0 are within 0..8"),
+                }) = Slot::Occupied(Piece::new(kind, turn.player));
+            }
         }
     }
 }
@@ -446,8 +466,7 @@ impl<'a> BoardView<'a> {
     /// considers moves which result in check mate as illegal.
     pub fn is_valid_move_ignoring_check(
         &self,
-        from: Position,
-        to: Position,
+        half_move_request: HalfMoveRequest,
         turn: Color,
         turn_history: &[Turn],
     ) -> Result<Turn, IllegalMoveType> {
@@ -466,9 +485,26 @@ impl<'a> BoardView<'a> {
         //   7.3 that neither the king nor the rook have been moved,
         //   7.4 and that neither the king's original position nor the position which the king
         //       passes through are under attack.
+        // 8. If promoting, that there exists a friendly pawn at row 7.
+
+        let (from, to) = match half_move_request {
+            HalfMoveRequest::Standard { source, dest } => (source, dest),
+            HalfMoveRequest::Promotion { column, kind: _ } => (
+                // Note that we assign temporary values for their rows, as we assign them below.
+                // Yes this is mega ugly, but I don't have enough time. :)))
+                Position {
+                    column,
+                    row: PositionIndex::new(0).expect("0 is within 0..8"),
+                },
+                Position {
+                    column,
+                    row: PositionIndex::new(0).expect("0 is within 0..8"),
+                },
+            ),
+        };
 
         // Invert if black so we can assume that white is the current player.
-        let (board, from, to, turn_history) = match turn {
+        let (board, mut from, mut to, turn_history) = match turn {
             Color::White => (self, from, to, turn_history.into()),
             Color::Black => (
                 &self.to_opposite(),
@@ -480,6 +516,13 @@ impl<'a> BoardView<'a> {
                     .collect::<Box<_>>(),
             ),
         };
+
+        // Make sure that the promotion rows are set after from and to are considered for white
+        // pieces.
+        if matches!(half_move_request, HalfMoveRequest::Promotion { .. }) {
+            from.row = PositionIndex::new(6).expect("6 is within 0..8");
+            to.row = PositionIndex::new(7).expect("7 is within 0..8");
+        }
 
         let source_slot = board.at_position(from);
         let dest_slot = board.at_position(to);
@@ -648,6 +691,18 @@ impl<'a> BoardView<'a> {
             });
         }
 
+        // Check 8.
+        if let HalfMoveRequest::Promotion { column, kind } = half_move_request {
+            if piece.kind != PieceKind::Pawn {
+                return Err(IllegalMoveType::PromotingNoPawn);
+            }
+
+            return Ok(Turn {
+                player: turn,
+                half_move: HalfMove::Promotion { column, kind },
+            });
+        }
+
         // Invert back if black
         let (from, to, capture) = match turn {
             Color::White => (from, to, capture),
@@ -672,8 +727,7 @@ impl<'a> BoardView<'a> {
     /// is, or the reason if it isn't.
     pub fn is_valid_move(
         &self,
-        from: Position,
-        to: Position,
+        half_move_request: HalfMoveRequest,
         turn_player: Color,
         turn_history: &[Turn],
     ) -> Result<Turn, IllegalMoveType> {
@@ -682,10 +736,11 @@ impl<'a> BoardView<'a> {
         // - If in check, then source must be king
         //   ^ can be combined as check for check mate after move.
         // - That the move isn't repeated
-        let turn = self.is_valid_move_ignoring_check(from, to, turn_player, turn_history)?;
+        let turn =
+            self.is_valid_move_ignoring_check(half_move_request, turn_player, turn_history)?;
 
         // Create view with move applied, and calculate if it's in check.
-        let moved_board = self.with_moved_slot(from, to);
+        let moved_board = self.with_moved_slot(turn.source(), turn.dest());
 
         if let Some(attacked_position) = moved_board
             .get_check_state_for_color(turn_player, turn_history)
@@ -718,8 +773,12 @@ impl<'a> BoardView<'a> {
             moves::naive_moves_from_piece(piece, position)
                 .into_iter()
                 .filter(move |destination| {
-                    self.is_valid_move_ignoring_check(position, *destination, turn, turn_history)
-                        .is_ok()
+                    self.is_valid_move_ignoring_check(
+                        HalfMoveRequest::new_standard(position, *destination),
+                        turn,
+                        turn_history,
+                    )
+                    .is_ok()
                 }),
         )
     }
@@ -738,8 +797,12 @@ impl<'a> BoardView<'a> {
             moves::naive_moves_from_piece(piece, position)
                 .into_iter()
                 .filter(move |destination| {
-                    self.is_valid_move(position, *destination, turn, turn_history)
-                        .is_ok()
+                    self.is_valid_move(
+                        HalfMoveRequest::new_standard(position, *destination),
+                        turn,
+                        turn_history,
+                    )
+                    .is_ok()
                 }),
         )
     }
@@ -760,8 +823,7 @@ impl<'a> BoardView<'a> {
                     //   how to avoid.
                     if self
                         .is_valid_move_ignoring_check(
-                            attacker_position,
-                            position,
+                            HalfMoveRequest::new_standard(attacker_position, position),
                             color,
                             turn_history,
                         )
@@ -891,13 +953,38 @@ impl<'a> BoardView<'a> {
     }
 }
 
+/// Represents a requested half move. It only includes the minimal information necessary to uniquely
+/// identify every valid move. As such, promotion moves only contains the column of the pawn to be
+/// moved, as there can only every be one pawn which can be promoted per column.
+pub enum HalfMoveRequest {
+    Standard {
+        source: Position,
+        dest: Position,
+    },
+    Promotion {
+        /// Column of the pawn to be promoted.
+        column: PositionIndex,
+        kind: PieceKind,
+    },
+}
+
+impl HalfMoveRequest {
+    pub fn new_standard(source: Position, dest: Position) -> Self {
+        Self::Standard { source, dest }
+    }
+    pub fn new_promotion(column: PositionIndex, kind: PieceKind) -> Self {
+        Self::Promotion { column, kind }
+    }
+}
+
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum CastleType {
     Kingside,
     Queenside,
 }
 
-/// Represents a half move by a player of arbitrary color.
+/// Represents a half move performed by a player of arbitrary color. Unlike `HalfMoveRequest` this
+/// corresponds to a validate half move.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HalfMove {
     Standard {
@@ -911,6 +998,12 @@ pub enum HalfMove {
         capture: Option<(Position, PieceKind)>,
     },
     Castle(CastleType),
+    Promotion {
+        /// The column of the pawn which was promoted.
+        column: PositionIndex,
+        /// The type of piece it was promoted to.
+        kind: PieceKind,
+    },
 }
 
 /// Represents a half move performed by a player. This contains all the necessary information to
@@ -932,6 +1025,10 @@ impl Turn {
                 Color::White => Position::new(4, 0).expect("4 and 0 are within 0...8"),
                 Color::Black => Position::new(4, 7).expect("4 and 7 are within 0...8"),
             },
+            HalfMove::Promotion { column, kind: _ } => Position {
+                column,
+                row: PositionIndex::new(6).expect("6 is within 0..8"),
+            },
         }
     }
     /// The position the piece was moved to.
@@ -949,6 +1046,10 @@ impl Turn {
                 },
             )
             .expect("6, 2, 0, and 7 are within 0..8"),
+            HalfMove::Promotion { column, kind: _ } => Position {
+                column,
+                row: PositionIndex::new(7).expect("7 is within 0..8"),
+            },
         }
     }
 
@@ -958,6 +1059,8 @@ impl Turn {
             HalfMove::Standard { capture, .. } => capture,
             // Castling can't capture any pieces.
             HalfMove::Castle(_) => None,
+            // Promotion can't capture any pieces. (TODO: is this really true?)
+            HalfMove::Promotion { column: _, kind: _ } => None,
         }
     }
 
@@ -977,6 +1080,7 @@ impl Turn {
                     dest: dest.as_other_color(),
                     capture: capture.map(|(position, kind)| (position.as_other_color(), kind)),
                 },
+                ref promotion @ HalfMove::Promotion { .. } => promotion.clone(),
             },
         }
     }
@@ -1056,12 +1160,12 @@ impl Game {
         &self.history
     }
 
-    pub fn perform_move(mut self, from: Position, to: Position) -> MoveResult {
+    pub fn perform_move(mut self, half_move: HalfMoveRequest) -> MoveResult {
         // Check if the move is valid.
         let turn = match self
             .board
             .view()
-            .is_valid_move(from, to, self.turn, self.history())
+            .is_valid_move(half_move, self.turn, self.history())
         {
             Ok(turn) => turn,
             Err(error) => return MoveResult::Illegal(self, error),

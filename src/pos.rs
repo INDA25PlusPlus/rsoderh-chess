@@ -13,6 +13,17 @@ impl PositionIndex {
         }
     }
 
+    pub fn parse(string: &str) -> Option<Self> {
+        let char_ = string.chars().next()?;
+        match char_ {
+            column_char @ ('a'..='h' | 'A'..='H') => {
+                Self::new((column_char.to_digit(18)? - 10) as u8)
+            }
+            row_char @ ('1'..='8') => Self::new((row_char.to_digit(10)? - 1) as u8),
+            _ => None,
+        }
+    }
+
     pub fn get(&self) -> u8 {
         self.0
     }

@@ -31,6 +31,14 @@ macro_rules! assert_match {
     }};
 }
 
+/// Dump type used for tests. Don't read too much into name.
+enum MoveDescription<'a> {
+    Standard(&'a str, &'a str),
+    /// Contains the column and Piece
+    Promotion(&'a str, PieceKind),
+}
+use MoveDescription::*;
+
 impl Game {
     /// Apply moves as pairs of cell coordinate strings, like "d4". The `MoveResult` of the final
     /// move is returned. Panics if any of the strings aren't valid positions, if any result in
@@ -39,22 +47,33 @@ impl Game {
     /// Useful for writing tests, don't use otherwise!
     fn apply_moves<'a>(
         mut self,
-        moves: impl IntoIterator<Item = (&'a str, &'a str)>,
+        moves: impl IntoIterator<Item = MoveDescription<'a>>,
     ) -> MoveResult {
         let mut iter = moves.into_iter().peekable();
-        while let Some((source, dest)) = iter.next() {
-            let source = Position::parse(source).expect("string should be valid chess coordinate");
-            let dest = Position::parse(dest).expect("string should be valid chess coordinate");
-
+        while let Some(move_) = iter.next() {
             let is_last_move = iter.peek().is_none();
 
-            match self.perform_move(source, dest) {
+            let move_str = match move_ {
+                Promotion(column_str, kind) => format!("promote {}7 to {:?}", column_str, kind),
+                Standard(source_str, dest_str) => format!("{} -> {}", source_str, dest_str),
+            };
+
+            let move_request = match move_ {
+                Standard(source, dest) => HalfMoveRequest::new_standard(
+                    Position::parse(source).expect("string should be valid chess coordinate"),
+                    Position::parse(dest).expect("string should be valid chess coordinate"),
+                ),
+                Promotion(column_str, kind) => HalfMoveRequest::Promotion {
+                    column: PositionIndex::parse(column_str)
+                        .expect("string should be a valid chess column coordinate"),
+                    kind,
+                },
+            };
+
+            match self.perform_move(move_request) {
                 result if is_last_move => return result,
                 MoveResult::Illegal(_, ref move_type) => {
-                    panic!(
-                        "Move {:?} -> {:?} is invalid: {:?}.",
-                        source, dest, move_type
-                    );
+                    panic!("Move {} is invalid: {:?}.", move_str, move_type);
                 }
                 MoveResult::Ongoing(game, _) => {
                     self = game;
@@ -62,9 +81,8 @@ impl Game {
                 result @ MoveResult::Finished(_) => {
                     if !is_last_move {
                         panic!(
-                            "Move {:?} -> {:?} resulted in finished game, while there are {} moves left.",
-                            source,
-                            dest,
+                            "Move {} resulted in finished game, while there are {} moves left.",
+                            move_str,
                             iter.count()
                         );
                     }
@@ -80,7 +98,7 @@ impl Game {
 fn assert_game_result<'a>(
     start_board_str: &'a str,
     start_player: Color,
-    moves: impl IntoIterator<Item = (&'a str, &'a str)>,
+    moves: impl IntoIterator<Item = MoveDescription<'a>>,
     end_board_str: &'a str,
     game_result: GameResult,
 ) {
@@ -172,7 +190,11 @@ fn simple_game() {
 
     let game = Game::new(Board::new_standard(), Color::White);
 
-    let result = game.apply_moves([("d2", "d4"), ("e7", "e5"), ("c1", "f4")]);
+    let result = game.apply_moves([
+        Standard("d2", "d4"),
+        Standard("e7", "e5"),
+        Standard("c1", "f4"),
+    ]);
 
     match result {
         MoveResult::Ongoing(
@@ -226,7 +248,12 @@ fn simple_complete_game() {
            a  b  c  d  e  f  g  h
         ",
         Color::White,
-        [("f2", "f3"), ("e7", "e6"), ("g2", "g4"), ("d8", "h4")],
+        [
+            Standard("f2", "f3"),
+            Standard("e7", "e6"),
+            Standard("g2", "g4"),
+            Standard("d8", "h4"),
+        ],
         "
          +--+--+--+--+--+--+--+--+
         8|br|bn|bb|  |bk|bb|bn|br|
@@ -391,8 +418,10 @@ fn pawn_moves() {
 
     assert_match!(
         board.view().is_valid_move(
-            Position::parse("b2").unwrap(),
-            Position::parse("b4").unwrap(),
+            HalfMoveRequest::new_standard(
+                Position::parse("b2").unwrap(),
+                Position::parse("b4").unwrap(),
+            ),
             Color::White,
             &[],
         ),
@@ -400,8 +429,10 @@ fn pawn_moves() {
     );
     assert_match!(
         board.view().is_valid_move(
-            Position::parse("c3").unwrap(),
-            Position::parse("c4").unwrap(),
+            HalfMoveRequest::new_standard(
+                Position::parse("c3").unwrap(),
+                Position::parse("c4").unwrap(),
+            ),
             Color::White,
             &[],
         ),
@@ -409,8 +440,10 @@ fn pawn_moves() {
     );
     assert_match!(
         board.view().is_valid_move(
-            Position::parse("c3").unwrap(),
-            Position::parse("c5").unwrap(),
+            HalfMoveRequest::new_standard(
+                Position::parse("c3").unwrap(),
+                Position::parse("c5").unwrap(),
+            ),
             Color::White,
             &[],
         ),
@@ -418,8 +451,10 @@ fn pawn_moves() {
     );
     assert_match!(
         board.view().is_valid_move(
-            Position::parse("d6").unwrap(),
-            Position::parse("e7").unwrap(),
+            HalfMoveRequest::new_standard(
+                Position::parse("d6").unwrap(),
+                Position::parse("e7").unwrap(),
+            ),
             Color::White,
             &[],
         ),
@@ -467,8 +502,10 @@ fn basic_illegal_moves() {
 
     assert_eq!(
         board.view().is_valid_move(
-            Position::parse("a1").unwrap(),
-            Position::parse("a2").unwrap(),
+            HalfMoveRequest::new_standard(
+                Position::parse("a1").unwrap(),
+                Position::parse("a2").unwrap(),
+            ),
             Color::White,
             &[],
         ),
@@ -476,8 +513,10 @@ fn basic_illegal_moves() {
     );
     assert_eq!(
         board.view().is_valid_move(
-            Position::parse("e7").unwrap(),
-            Position::parse("e6").unwrap(),
+            HalfMoveRequest::new_standard(
+                Position::parse("e7").unwrap(),
+                Position::parse("e6").unwrap(),
+            ),
             Color::White,
             &[],
         ),
@@ -485,8 +524,10 @@ fn basic_illegal_moves() {
     );
     assert_eq!(
         board.view().is_valid_move(
-            Position::parse("b3").unwrap(),
-            Position::parse("b5").unwrap(),
+            HalfMoveRequest::new_standard(
+                Position::parse("b3").unwrap(),
+                Position::parse("b5").unwrap(),
+            ),
             Color::White,
             &[],
         ),
@@ -515,8 +556,10 @@ fn illegal_move_check_mate_move_into() {
 
     assert_eq!(
         board.view().is_valid_move(
-            Position::parse("e4").unwrap(),
-            Position::parse("d4").unwrap(),
+            HalfMoveRequest::new_standard(
+                Position::parse("e4").unwrap(),
+                Position::parse("d4").unwrap(),
+            ),
             Color::White,
             &[],
         ),
@@ -548,8 +591,10 @@ fn illegal_move_check_mate_not_move_away() {
 
     assert_eq!(
         board.view().is_valid_move(
-            Position::parse("g4").unwrap(),
-            Position::parse("g5").unwrap(),
+            HalfMoveRequest::new_standard(
+                Position::parse("g4").unwrap(),
+                Position::parse("g5").unwrap(),
+            ),
             Color::White,
             &[],
         ),
@@ -581,8 +626,10 @@ fn illegal_move_check_mate_not_capture() {
 
     assert_eq!(
         board.view().is_valid_move(
-            Position::parse("f7").unwrap(),
-            Position::parse("f6").unwrap(),
+            HalfMoveRequest::new_standard(
+                Position::parse("f7").unwrap(),
+                Position::parse("f6").unwrap(),
+            ),
             Color::White,
             &[],
         ),
@@ -615,7 +662,7 @@ fn history() {
         Color::White,
     );
 
-    let game = match game.apply_moves([("d4", "b5"), ("b2", "b5")]) {
+    let game = match game.apply_moves([Standard("d4", "b5"), Standard("b2", "b5")]) {
         MoveResult::Ongoing(game, CheckOutcome::Safe) => game,
         result => panic!("Unexpected move result: {:?}", result),
     };
@@ -665,7 +712,7 @@ fn en_passant() {
         Color::Black,
     );
 
-    match game.apply_moves([("a7", "a5"), ("b5", "a6")]) {
+    match game.apply_moves([Standard("a7", "a5"), Standard("b5", "a6")]) {
         MoveResult::Ongoing(_, CheckOutcome::Safe) => {}
         result => panic!("Unexpected move result: {:?}", result),
     }
@@ -692,7 +739,7 @@ fn en_passant_illegal_pawn() {
         Color::Black,
     );
 
-    match game.apply_moves([("a6", "a5"), ("b5", "a6")]) {
+    match game.apply_moves([Standard("a6", "a5"), Standard("b5", "a6")]) {
         MoveResult::Illegal(_, IllegalMoveType::Position) => {}
         result => panic!("Unexpected move result: {:?}", result),
     }
@@ -720,7 +767,7 @@ fn en_passant_illegal_rook() {
         Color::Black,
     );
 
-    match game.apply_moves([("a6", "a5"), ("b5", "a6")]) {
+    match game.apply_moves([Standard("a6", "a5"), Standard("b5", "a6")]) {
         MoveResult::Illegal(_, IllegalMoveType::Position) => {}
         result => panic!("Unexpected move result: {:?}", result),
     }
@@ -747,8 +794,10 @@ fn moves_castling() {
 
     assert_match!(
         board.view().is_valid_move(
-            Position::parse("e8").unwrap(),
-            Position::parse("c8").unwrap(),
+            HalfMoveRequest::new_standard(
+                Position::parse("e8").unwrap(),
+                Position::parse("c8").unwrap(),
+            ),
             Color::Black,
             &[]
         ),
@@ -759,8 +808,10 @@ fn moves_castling() {
     );
     assert_match!(
         board.view().is_valid_move(
-            Position::parse("e8").unwrap(),
-            Position::parse("c8").unwrap(),
+            HalfMoveRequest::new_standard(
+                Position::parse("e8").unwrap(),
+                Position::parse("c8").unwrap(),
+            ),
             Color::Black,
             &[
                 Turn {
@@ -785,8 +836,10 @@ fn moves_castling() {
     );
     assert_match!(
         board.view().is_valid_move(
-            Position::parse("e8").unwrap(),
-            Position::parse("g8").unwrap(),
+            HalfMoveRequest::new_standard(
+                Position::parse("e8").unwrap(),
+                Position::parse("g8").unwrap(),
+            ),
             Color::Black,
             &[]
         ),
@@ -797,8 +850,10 @@ fn moves_castling() {
     );
     assert_match!(
         board.view().is_valid_move(
-            Position::parse("e8").unwrap(),
-            Position::parse("g8").unwrap(),
+            HalfMoveRequest::new_standard(
+                Position::parse("e8").unwrap(),
+                Position::parse("g8").unwrap(),
+            ),
             Color::Black,
             &[
                 Turn {
@@ -860,8 +915,10 @@ fn moves_castling_illegal_blocked() {
 
     assert_match!(
         board.view().is_valid_move(
-            Position::parse("e8").unwrap(),
-            Position::parse("c8").unwrap(),
+            HalfMoveRequest::new_standard(
+                Position::parse("e8").unwrap(),
+                Position::parse("c8").unwrap(),
+            ),
             Color::Black,
             &[]
         ),
@@ -869,8 +926,10 @@ fn moves_castling_illegal_blocked() {
     );
     assert_match!(
         board.view().is_valid_move(
-            Position::parse("e8").unwrap(),
-            Position::parse("g8").unwrap(),
+            HalfMoveRequest::new_standard(
+                Position::parse("e8").unwrap(),
+                Position::parse("g8").unwrap(),
+            ),
             Color::Black,
             &[]
         ),
@@ -899,8 +958,10 @@ fn moves_castling_illegal_attacked() {
 
     assert_match!(
         board.view().is_valid_move(
-            Position::parse("e8").unwrap(),
-            Position::parse("c8").unwrap(),
+            HalfMoveRequest::new_standard(
+                Position::parse("e8").unwrap(),
+                Position::parse("c8").unwrap(),
+            ),
             Color::Black,
             &[]
         ),
@@ -908,8 +969,10 @@ fn moves_castling_illegal_attacked() {
     );
     assert_match!(
         board.view().is_valid_move(
-            Position::parse("e8").unwrap(),
-            Position::parse("g8").unwrap(),
+            HalfMoveRequest::new_standard(
+                Position::parse("e8").unwrap(),
+                Position::parse("g8").unwrap(),
+            ),
             Color::Black,
             &[]
         ),
@@ -917,8 +980,10 @@ fn moves_castling_illegal_attacked() {
     );
     assert_match!(
         board.view().is_valid_move(
-            Position::parse("e1").unwrap(),
-            Position::parse("g1").unwrap(),
+            HalfMoveRequest::new_standard(
+                Position::parse("e1").unwrap(),
+                Position::parse("g1").unwrap(),
+            ),
             Color::White,
             &[]
         ),
@@ -943,7 +1008,7 @@ fn game_castling() {
            a  b  c  d  e  f  g  h
         ",
         Color::Black,
-        [("e8", "c8")],
+        [Standard("e8", "c8")],
         "
          +--+--+--+--+--+--+--+--+
         8|  |  |bk|br|  |  |  |  |
@@ -1024,5 +1089,46 @@ fn check_blockable_attacker() {
             piece: Position::parse("d5").unwrap(),
             attackers: [Position::parse("f5").unwrap()].into()
         })],
+    );
+}
+
+#[test]
+fn game_promotion() {
+    assert_game_result(
+        "
+         +--+--+--+--+--+--+--+--+
+        8|  |  |  |  |  |  |  |  |
+        7|  |  |  |  |  |  |  |  |
+        6|  |  |  |  |  |  |  |  |
+        5|  |  |  |wk|  |  |  |  |
+        4|  |  |  |  |  |  |  |  |
+        3|  |  |  |  |  |  |  |  |
+        2|  |  |br|bp|br|  |  |  |
+        1|  |  |  |  |  |  |  |  |
+         +--+--+--+--+--+--+--+--+
+           a  b  c  d  e  f  g  h
+        ",
+        Color::Black,
+        [Promotion("d", PieceKind::Queen)],
+        "
+         +--+--+--+--+--+--+--+--+
+        8|  |  |  |  |  |  |  |  |
+        7|  |  |  |  |  |  |  |  |
+        6|  |  |  |  |  |  |  |  |
+        5|  |  |  |wk|  |  |  |  |
+        4|  |  |  |  |  |  |  |  |
+        3|  |  |  |  |  |  |  |  |
+        2|  |  |br|  |br|  |  |  |
+        1|  |  |  |bq|  |  |  |  |
+         +--+--+--+--+--+--+--+--+
+           a  b  c  d  e  f  g  h
+        ",
+        GameResult::Checkmate {
+            winner: Color::Black,
+            attacked_king: AttackedPosition {
+                piece: Position::parse("d5").unwrap(),
+                attackers: vec![Position::parse("d1").unwrap()].into(),
+            },
+        },
     );
 }

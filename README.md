@@ -38,14 +38,14 @@ fn main() {
 
 ### `Game`
 
-This struct represents a certain turn of an ongoing game. You use it by issuing half moves using `Board::perform_move`, specifying a source and destination position. (Note that in chess a "half move" refers to a single piece being moved. A full move is made up of two such turns. However, since I was lazy when naming things most places in this library refers to half moves as just moves.) It validates the move, and if valid returns a new `Game` value with the half move applied. If the half move resulted in checkmate another struct, `FinishedGame`, is returned instead. The fact that the previous `Game` value is consumed and that a new instance is returned means that the API is functional! :)
+This struct represents a certain turn of an ongoing game. You use it by issuing half moves using `Board::perform_move`, specifying an instance of the `HalfMoveRequest` struct. (Note that in chess a "half move" refers to a single piece being moved. A full move is made up of two such turns. However, since I was lazy when naming things many places in this library refers to half moves as just moves.) Most moves can be described with a source and destination position, which are created with `HalfMoveRequest::new_standard(source, destination)`. `Board::perform_move` then validates the move, and if valid returns a new `Game` value with the half move applied. If the half move resulted in a checkmate, another struct, `FinishedGame`, is returned instead. The fact that the previous `Game` value is consumed and that a new instance is returned means that this part of the API is purely functional! :)
 
 The `Game` struct contains a field with a `Board` instance, which you can access using `game.board()`. See below for its details. For now the important part is that when printed is pretty-printed as an ASCII art table.
 
 Here is an example of a complete game showcasing the fool's mate, the fastest possible checkmate at just two full moves! Note that the final call to `Game::perform_move` returned the `MoveResult::Finished` enum variant with a `FinishedGame` instance instead of a `Game`. It's very similar to the `Game` struct, except that you can't call `Board::perform_move` or `Board::valid_moves`.
 
 ```rust
-use rsoderh_chess::{FinishedGame, Game, MoveResult, Position};
+use rsoderh_chess::{FinishedGame, Game, HalfMoveRequest, MoveResult, Position};
 
 fn main() {
     let game: Game = Game::new_standard();
@@ -65,10 +65,10 @@ fn main() {
     */
     // White's turn
     // Here we assign the "newly created" game value.
-    let game: Game = match game.perform_move(
+    let game: Game = match game.perform_move(HalfMoveRequest::new_standard(
         Position::parse("f2").unwrap(),
         Position::parse("f3").unwrap(),
-    ) {
+    )) {
         MoveResult::Ongoing(game, check_outcome) => {
             println!("check: {:?}", check_outcome);
             // check: Safe
@@ -76,37 +76,37 @@ fn main() {
         }
         _ => unreachable!(),
     };
-    
+
     // Black's turn
-    let game: Game = match game.perform_move(
+    let game: Game = match game.perform_move(HalfMoveRequest::new_standard(
         Position::parse("e7").unwrap(),
         Position::parse("e6").unwrap(),
-    ) {
+    )) {
         MoveResult::Ongoing(game, _) => game,
         _ => unreachable!(),
     };
-    
+
     // White's turn
-    let game: Game = match game.perform_move(
+    let game: Game = match game.perform_move(HalfMoveRequest::new_standard(
         Position::parse("g2").unwrap(),
         Position::parse("g4").unwrap(),
-    ) {
+    )) {
         MoveResult::Ongoing(game, _) => game,
         _ => unreachable!(),
     };
-    
+
     // Black's turn
-    let finished_game: FinishedGame = match game.perform_move(
+    let finished_game: FinishedGame = match game.perform_move(HalfMoveRequest::new_standard(
         Position::parse("d8").unwrap(),
         Position::parse("h4").unwrap(),
-    ) {
+    )) {
         MoveResult::Finished(finished_game) => finished_game,
         _ => unreachable!(),
     };
-    
+
     println!("final board: {:?}", finished_game.board());
     /*
-    final board: 
+    final board:
          +--+--+--+--+--+--+--+--+
         8|br|bn|bb|  |bk|bb|bn|br|
         7|bp|bp|bp|bp|  |bp|bp|bp|
@@ -158,9 +158,15 @@ fn main() {
 }
 ```
 
+#### Promotion
+`Board::perform_move` also supports pawn promotion! This is achieved by passing this it a value like `HalfMoveRequest::new_promotion(column, kind)`. Note that you only need to specify the column, as there can only every be one pawn per column which can be promoted. Note that due to time constraints I don't have time to write a complete usage example. In that snippet, the two arguments have two new types which I haven't discussed. `column` is an instance of `PositionIndex`, and `kind` is an instance of `PieceKind`. Search for them in the source code where I've hopefully documentend how to create them well enough. Please ask me if you have any questions.
+
+Also, this feature was added last minute, and probably has lots of bugs. For instance, currently there is no way to promote and capture a piece in the same move. So feel free to just not use it in your chess game.
+
+
 ### `Board`
 
-Represents the certain chess position. It can be accessed by `Board::board()`, and when debug printed it is pretty-printed. See the example below. Like `Position`, a `Board` can also be parsed from a string using `Board::parse_str`. It follows the same format used when pretty-printing boards.
+Represents a certain chess position. It can be accessed by `Board::board()`, and when debug printed it is pretty-printed. See the example below. Like `Position`, a `Board` can also be parsed from a string using `Board::parse_str`. It follows the same format used when pretty-printing boards.
 
 ```rust
 use rsoderh_chess::Board;
